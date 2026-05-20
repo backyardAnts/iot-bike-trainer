@@ -26,6 +26,7 @@ class VirtualBike:
         self.device_id = device_id
         self.session_id = session_id
         self.buzzer_state = False
+        self.session_active = False
 
         master_rng = random.Random(random_seed)
         self.speed_sensor = VirtualSpeedSensor(rng=_make_child_rng(master_rng))
@@ -88,7 +89,18 @@ class VirtualBike:
         """Turn the virtual buzzer off."""
         self.set_buzzer_state(False)
 
+    def start_session(self) -> None:
+        """Mark the current virtual ride session as active."""
+        self.session_active = True
+
+    def stop_session(self) -> None:
+        """Mark the current virtual ride session as inactive."""
+        self.session_active = False
+
+    def is_session_active(self) -> bool:
+        """Return whether the virtual ride session is active."""
+        return self.session_active
+
 
 def _make_child_rng(master_rng: random.Random) -> random.Random:
     return random.Random(master_rng.randrange(0, 2**32))
-

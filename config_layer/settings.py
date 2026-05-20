@@ -1,9 +1,49 @@
-"""General settings and simulation limits for Phase 3 virtual sensors."""
+"""General settings and simulation limits for the bike trainer project."""
+
+from __future__ import annotations
+
+import os
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
+if load_dotenv is not None:
+    load_dotenv()
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 
 DEVICE_ID = "bike_001"
 DEFAULT_SESSION_ID = "session_001"
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 1
 DEFAULT_RANDOM_SEED = None
+
+MQTT_BROKER_HOST = os.getenv("MQTT_BROKER_HOST", "broker.hivemq.com")
+MQTT_BROKER_PORT = _env_int("MQTT_BROKER_PORT", 1883)
+MQTT_USERNAME = os.getenv("MQTT_USERNAME", "")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
+MQTT_USE_TLS = _env_bool("MQTT_USE_TLS", False)
+MQTT_KEEPALIVE_SECONDS = _env_int("MQTT_KEEPALIVE_SECONDS", 60)
+MQTT_CLIENT_ID_PREFIX = "anthony_bike_001"
 
 MIN_SPEED_KMH = 0
 MAX_SPEED_KMH = 35
