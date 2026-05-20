@@ -51,3 +51,38 @@ python main_virtual_bike.py --self-test
 The virtual layer is intentionally separate from MQTT, SQLite, Streamlit,
 alerts, and AI rules so it can later be replaced by real Raspberry Pi sensors
 while keeping the same final message format.
+
+## Rider Feedback System
+
+The old virtual buzzer field has been replaced with rider feedback fields in
+the JSON message:
+
+- `display_active`: whether a future LCD, RGB, or OLED display should show text
+- `display_message`: text for a future LCD, RGB, or OLED display
+- `speaker_message`: text for a future spoken warning
+- `alert_level`: `normal`, `info`, `warning`, or `danger`
+- `alert_side`: `none`, `left`, `right`, or `both`
+
+The default state is blank and inactive: `display_active` is `false`,
+`display_message` is empty, and `speaker_message` is empty. These fields are
+virtual state only for now. No LCD, speaker, GPIO, AI, alert, database, or
+dashboard code is included in this phase.
+
+## Phase 6: Backend and SQLite Storage
+
+Run the MQTT backend from the project root:
+
+```bash
+python main_backend.py
+```
+
+Then run the virtual bike MQTT publisher in another terminal:
+
+```bash
+python main_virtual_bike.py --mqtt
+```
+
+The backend subscribes to the sensor, status, and command topics and stores
+messages in `data/bike_trainer.db`. The database layer also creates session,
+settings, and future alerts tables, but it does not add AI rules, Streamlit,
+hardware output, or external alerts.

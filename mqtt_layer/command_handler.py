@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from config_layer import settings
+
 
 class CommandHandler:
     """Parse and apply supported commands received over MQTT."""
@@ -25,12 +27,69 @@ class CommandHandler:
         command = str(command_data.get("command", "")).strip().upper()
 
         if command == "BUZZER_ON":
-            self.bike.turn_buzzer_on()
-            return self._result(True, command, "Buzzer turned on")
+            # Legacy command: keep old clients from crashing while moving to rider feedback.
+            self.bike.set_feedback(
+                display_active=True,
+                display_message="WARNING",
+                speaker_message="Warning.",
+                alert_level="warning",
+                alert_side="none",
+            )
+            return self._result(
+                True,
+                command,
+                "Legacy BUZZER_ON mapped to warning rider feedback",
+            )
 
         if command == "BUZZER_OFF":
-            self.bike.turn_buzzer_off()
-            return self._result(True, command, "Buzzer turned off")
+            # Legacy command: keep old clients from crashing while moving to rider feedback.
+            self.bike.clear_feedback()
+            return self._result(
+                True,
+                command,
+                "Legacy BUZZER_OFF mapped to CLEAR_FEEDBACK",
+            )
+
+        if command == "DISPLAY_MESSAGE":
+            message = str(command_data.get("message", ""))
+            self.bike.set_display_message(message)
+            return self._result(True, command, "Display message updated")
+
+        if command == "SPEAK_MESSAGE":
+            message = str(command_data.get("message", ""))
+            self.bike.set_speaker_message(message)
+            return self._result(True, command, "Speaker message updated")
+
+        if command == "SET_FEEDBACK":
+            display_active = command_data.get("display_active")
+            display_message = command_data.get(
+                "display_message",
+                getattr(self.bike, "display_message", settings.DEFAULT_DISPLAY_MESSAGE),
+            )
+            speaker_message = command_data.get(
+                "speaker_message",
+                getattr(self.bike, "speaker_message", settings.DEFAULT_SPEAKER_MESSAGE),
+            )
+            alert_level = command_data.get(
+                "alert_level",
+                getattr(self.bike, "alert_level", settings.DEFAULT_ALERT_LEVEL),
+            )
+            alert_side = command_data.get(
+                "alert_side",
+                getattr(self.bike, "alert_side", settings.DEFAULT_ALERT_SIDE),
+            )
+            self.bike.set_feedback(
+                display_active=display_active,
+                display_message=str(display_message),
+                speaker_message=str(speaker_message),
+                alert_level=str(alert_level),
+                alert_side=str(alert_side),
+            )
+            return self._result(True, command, "Rider feedback updated")
+
+        if command == "CLEAR_FEEDBACK":
+            self.bike.clear_feedback()
+            return self._result(True, command, "Rider feedback cleared")
 
         if command == "START_SESSION":
             self._start_session()
@@ -102,4 +161,3 @@ class CommandHandler:
         }
         result.update(extra)
         return result
-

@@ -25,7 +25,11 @@ class VirtualBike:
     ) -> None:
         self.device_id = device_id
         self.session_id = session_id
-        self.buzzer_state = False
+        self.display_active = settings.DEFAULT_DISPLAY_ACTIVE
+        self.display_message = settings.DEFAULT_DISPLAY_MESSAGE
+        self.speaker_message = settings.DEFAULT_SPEAKER_MESSAGE
+        self.alert_level = settings.DEFAULT_ALERT_LEVEL
+        self.alert_side = settings.DEFAULT_ALERT_SIDE
         self.session_active = False
 
         master_rng = random.Random(random_seed)
@@ -67,7 +71,11 @@ class VirtualBike:
             temperature_c=temperature_c,
             left_distance_m=left_distance_m,
             right_distance_m=right_distance_m,
-            buzzer_state=self.buzzer_state,
+            display_active=self.display_active,
+            display_message=self.display_message,
+            speaker_message=self.speaker_message,
+            alert_level=self.alert_level,
+            alert_side=self.alert_side,
         )
         return self._latest_message
 
@@ -77,17 +85,55 @@ class VirtualBike:
             return self.update()
         return self._latest_message
 
-    def set_buzzer_state(self, state: bool) -> None:
-        """Set the virtual buzzer state without applying any AI rule."""
-        self.buzzer_state = bool(state)
+    def set_feedback(
+        self,
+        display_message: str = settings.DEFAULT_DISPLAY_MESSAGE,
+        speaker_message: str = settings.DEFAULT_SPEAKER_MESSAGE,
+        alert_level: str = settings.DEFAULT_ALERT_LEVEL,
+        alert_side: str = settings.DEFAULT_ALERT_SIDE,
+        display_active: bool | str | None = None,
+    ) -> None:
+        """Set virtual rider feedback without applying automatic AI rules."""
+        normalized_alert_level = _normalize_alert_level(alert_level)
+        display_text = str(display_message)
+        speaker_text = str(speaker_message)
 
-    def turn_buzzer_on(self) -> None:
-        """Turn the virtual buzzer on."""
-        self.set_buzzer_state(True)
+        self.display_active = _resolve_display_active(
+            display_active,
+            display_text,
+            speaker_text,
+            normalized_alert_level,
+        )
+        self.display_message = display_text
+        self.speaker_message = speaker_text
+        self.alert_level = normalized_alert_level
+        self.alert_side = _normalize_alert_side(alert_side)
 
-    def turn_buzzer_off(self) -> None:
-        """Turn the virtual buzzer off."""
-        self.set_buzzer_state(False)
+    def clear_feedback(self) -> None:
+        """Reset rider feedback to the blank inactive state."""
+        self.set_feedback(
+            display_message=settings.DEFAULT_DISPLAY_MESSAGE,
+            speaker_message=settings.DEFAULT_SPEAKER_MESSAGE,
+            alert_level=settings.DEFAULT_ALERT_LEVEL,
+            alert_side=settings.DEFAULT_ALERT_SIDE,
+            display_active=settings.DEFAULT_DISPLAY_ACTIVE,
+        )
+
+    def set_display_message(self, message: str) -> None:
+        """Set the virtual LCD/OLED display message."""
+        self.display_message = str(message)
+        self.display_active = _should_display_be_active(
+            self.display_message,
+            self.alert_level,
+        )
+
+    def set_speaker_message(self, message: str) -> None:
+        """Set the virtual speaker message."""
+        self.speaker_message = str(message)
+        self.display_active = _should_display_be_active(
+            self.display_message,
+            self.alert_level,
+        )
 
     def start_session(self) -> None:
         """Mark the current virtual ride session as active."""
@@ -104,3 +150,44 @@ class VirtualBike:
 
 def _make_child_rng(master_rng: random.Random) -> random.Random:
     return random.Random(master_rng.randrange(0, 2**32))
+
+
+def _normalize_alert_level(alert_level: str) -> str:
+    value = str(alert_level).strip().lower()
+    if value in settings.ALLOWED_ALERT_LEVELS:
+        return value
+    return settings.DEFAULT_ALERT_LEVEL
+
+
+def _normalize_alert_side(alert_side: str) -> str:
+    value = str(alert_side).strip().lower()
+    if value in settings.ALLOWED_ALERT_SIDES:
+        return value
+    return settings.DEFAULT_ALERT_SIDE
+
+
+def _resolve_display_active(
+    display_active: bool | str | None,
+    display_message: str,
+    speaker_message: str,
+    alert_level: str,
+) -> bool:
+    if display_active is not None:
+        return _coerce_bool(display_active)
+
+    return bool(
+        display_message
+        or speaker_message
+        or alert_level in {"warning", "danger"}
+    )
+
+
+def _coerce_bool(value: bool | str) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _should_display_be_active(display_message: str, alert_level: str) -> bool:
+    return bool(display_message or alert_level in {"warning", "danger"})

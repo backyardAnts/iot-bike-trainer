@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from common.time_utils import get_current_timestamp
+from config_layer.settings import ALLOWED_ALERT_LEVELS, ALLOWED_ALERT_SIDES
 
 
 REQUIRED_SENSOR_MESSAGE_KEYS = (
@@ -16,7 +17,11 @@ REQUIRED_SENSOR_MESSAGE_KEYS = (
     "temperature_c",
     "left_distance_m",
     "right_distance_m",
-    "buzzer_state",
+    "display_active",
+    "display_message",
+    "speaker_message",
+    "alert_level",
+    "alert_side",
 )
 
 
@@ -29,7 +34,11 @@ def build_sensor_message(
     temperature_c: float,
     left_distance_m: float,
     right_distance_m: float,
-    buzzer_state: bool,
+    display_active: bool,
+    display_message: str,
+    speaker_message: str,
+    alert_level: str,
+    alert_side: str,
 ) -> dict[str, Any]:
     """Create the standard JSON-ready bike sensor message."""
     return {
@@ -42,7 +51,11 @@ def build_sensor_message(
         "temperature_c": round(float(temperature_c), 1),
         "left_distance_m": round(float(left_distance_m), 2),
         "right_distance_m": round(float(right_distance_m), 2),
-        "buzzer_state": bool(buzzer_state),
+        "display_active": bool(display_active),
+        "display_message": str(display_message),
+        "speaker_message": str(speaker_message),
+        "alert_level": str(alert_level),
+        "alert_side": str(alert_side),
     }
 
 
@@ -77,7 +90,19 @@ def validate_sensor_message(message: dict[str, Any]) -> bool:
         return False
     if not _is_number(message["right_distance_m"]):
         return False
-    if not isinstance(message["buzzer_state"], bool):
+    if not isinstance(message["display_active"], bool):
+        return False
+    if not isinstance(message["display_message"], str):
+        return False
+    if not isinstance(message["speaker_message"], str):
+        return False
+    if not isinstance(message["alert_level"], str):
+        return False
+    if not isinstance(message["alert_side"], str):
+        return False
+    if message["alert_level"] not in ALLOWED_ALERT_LEVELS:
+        return False
+    if message["alert_side"] not in ALLOWED_ALERT_SIDES:
         return False
 
     return True
