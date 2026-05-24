@@ -5,12 +5,18 @@ from typing import Any
 
 from common.time_utils import get_current_timestamp
 from config_layer.settings import ALLOWED_ALERT_LEVELS, ALLOWED_ALERT_SIDES
+from config_layer.training_profiles import (
+    get_training_profile,
+    is_valid_workout_type,
+    normalize_workout_type,
+)
 
 
 REQUIRED_SENSOR_MESSAGE_KEYS = (
     "device_id",
     "timestamp",
     "session_id",
+    "workout_type",
     "speed_kmh",
     "cadence_rpm",
     "heart_rate_bpm",
@@ -24,10 +30,15 @@ REQUIRED_SENSOR_MESSAGE_KEYS = (
     "alert_side",
 )
 
+LEGACY_SENSOR_MESSAGE_KEYS = tuple(
+    key for key in REQUIRED_SENSOR_MESSAGE_KEYS if key != "workout_type"
+)
+
 
 def build_sensor_message(
     device_id: str,
     session_id: str,
+    workout_type: str,
     speed_kmh: float,
     cadence_rpm: int,
     heart_rate_bpm: int,
@@ -41,10 +52,14 @@ def build_sensor_message(
     alert_side: str,
 ) -> dict[str, Any]:
     """Create the standard JSON-ready bike sensor message."""
+    get_training_profile(workout_type)
+    normalized_workout_type = normalize_workout_type(workout_type)
+
     return {
         "device_id": str(device_id),
         "timestamp": get_current_timestamp(),
         "session_id": str(session_id),
+        "workout_type": normalized_workout_type,
         "speed_kmh": round(float(speed_kmh), 1),
         "cadence_rpm": int(cadence_rpm),
         "heart_rate_bpm": int(heart_rate_bpm),
@@ -69,7 +84,12 @@ def validate_sensor_message(message: dict[str, Any]) -> bool:
     if not isinstance(message, dict):
         return False
 
-    if set(message.keys()) != set(REQUIRED_SENSOR_MESSAGE_KEYS):
+    message_keys = set(message.keys())
+    has_workout_type = "workout_type" in message
+    if message_keys not in (
+        set(REQUIRED_SENSOR_MESSAGE_KEYS),
+        set(LEGACY_SENSOR_MESSAGE_KEYS),
+    ):
         return False
 
     if not isinstance(message["device_id"], str):
@@ -78,6 +98,11 @@ def validate_sensor_message(message: dict[str, Any]) -> bool:
         return False
     if not isinstance(message["session_id"], str):
         return False
+    if has_workout_type:
+        if not isinstance(message["workout_type"], str):
+            return False
+        if not is_valid_workout_type(message["workout_type"]):
+            return False
     if not _is_number(message["speed_kmh"]):
         return False
     if not _is_int(message["cadence_rpm"]):

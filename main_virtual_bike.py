@@ -11,15 +11,25 @@ from config_layer.settings import (
     DEFAULT_RANDOM_SEED,
     DEFAULT_SAMPLE_INTERVAL_SECONDS,
 )
+from config_layer.training_profiles import (
+    TRAINING_PROFILES,
+    WORKOUT_TYPES,
+    get_training_profile,
+    is_valid_workout_type,
+    normalize_workout_type,
+)
 from sensor_layer.virtual_sensors.virtual_bike import VirtualBike
 
 
 def run_forever(
+    workout_type: str,
     random_seed: int | None = DEFAULT_RANDOM_SEED,
     interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
 ) -> None:
     """Print one JSON sensor message per sample interval until Ctrl+C."""
-    bike = VirtualBike(random_seed=random_seed)
+    bike = VirtualBike(workout_type=workout_type, random_seed=random_seed)
+    profile = get_training_profile(bike.workout_type)
+    print(f"Workout type: {profile['display_name']}")
     print("Virtual bike simulator started. Press Ctrl+C to stop.")
 
     try:
@@ -32,6 +42,7 @@ def run_forever(
 
 
 def run_mqtt_mode(
+    workout_type: str,
     random_seed: int | None = DEFAULT_RANDOM_SEED,
     interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
 ) -> None:
@@ -42,7 +53,8 @@ def run_mqtt_mode(
     from mqtt_layer.publisher import MqttPublisher
     from mqtt_layer.subscriber import MqttCommandSubscriber
 
-    bike = VirtualBike(random_seed=random_seed)
+    bike = VirtualBike(workout_type=workout_type, random_seed=random_seed)
+    profile = get_training_profile(bike.workout_type)
     client: Any | None = None
     subscriber: MqttCommandSubscriber | None = None
     publisher: MqttPublisher | None = None
@@ -61,8 +73,10 @@ def run_mqtt_mode(
             {
                 "device_id": bike.device_id,
                 "session_id": bike.session_id,
+                "workout_type": bike.workout_type,
             },
         )
+        print(f"Workout type: {profile['display_name']}")
         print("Virtual bike MQTT simulator started. Press Ctrl+C to stop.")
 
         while True:
@@ -85,16 +99,67 @@ def run_mqtt_mode(
 
 def run_self_test(reading_count: int = 10) -> None:
     """Run a short deterministic simulation and validate each message."""
-    bike = VirtualBike(random_seed=42)
+    print("Testing valid workout types.")
+    for workout_type in WORKOUT_TYPES:
+        bike = VirtualBike(workout_type=workout_type, random_seed=42)
+        message = bike.update()
+        if message.get("workout_type") != workout_type:
+            raise RuntimeError(f"Unexpected workout type in message: {message}")
+        if not validate_sensor_message(message):
+            raise RuntimeError(f"Invalid sensor message: {message}")
+
+    try:
+        VirtualBike(workout_type="invalid")
+    except ValueError:
+        print("Invalid workout type rejected.")
+    else:
+        raise RuntimeError("Invalid workout type was accepted.")
+
+    bike = VirtualBike(workout_type="endurance", random_seed=42)
     print(f"Running virtual bike self-test for {reading_count} readings.")
 
     for _ in range(reading_count):
         message = bike.update()
+        if "workout_type" not in message:
+            raise RuntimeError(f"Missing workout_type in sensor message: {message}")
         if not validate_sensor_message(message):
             raise RuntimeError(f"Invalid sensor message: {message}")
         print(message_to_json(message))
 
     print("Self-test passed.")
+
+
+def choose_workout_type(workout_type: str | None = None) -> str:
+    """Return a validated workout type from CLI input or an interactive menu."""
+    if workout_type is not None:
+        if is_valid_workout_type(workout_type):
+            return normalize_workout_type(workout_type)
+        supported = ", ".join(WORKOUT_TYPES)
+        raise ValueError(
+            f"Invalid workout type: {workout_type}. "
+            f"Choose one of: {supported}."
+        )
+
+    while True:
+        print("\nChoose workout type:")
+        for index, profile_workout_type in enumerate(WORKOUT_TYPES, start=1):
+            profile = TRAINING_PROFILES[profile_workout_type]
+            print(f"{index}. {profile['display_name']}")
+
+        selected = input("Enter number or workout type: ").strip()
+        if selected.isdigit():
+            selected_index = int(selected)
+            if 1 <= selected_index <= len(WORKOUT_TYPES):
+                return WORKOUT_TYPES[selected_index - 1]
+
+        if is_valid_workout_type(selected):
+            return normalize_workout_type(selected)
+
+        supported = ", ".join(WORKOUT_TYPES)
+        print(
+            f"Invalid workout type. Choose 1-{len(WORKOUT_TYPES)} "
+            f"or one of: {supported}."
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -121,14 +186,32 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_RANDOM_SEED,
         help="optional random seed for repeatable virtual readings",
     )
+    parser.add_argument(
+        "--workout",
+        metavar="{speed,cadence,endurance,vo2_max}",
+        help="workout type to simulate",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.self_test:
-        run_self_test()
-    elif args.mqtt:
-        run_mqtt_mode(random_seed=args.seed, interval_seconds=args.interval)
-    else:
-        run_forever(random_seed=args.seed, interval_seconds=args.interval)
+    try:
+        if args.self_test:
+            run_self_test()
+        else:
+            selected_workout_type = choose_workout_type(args.workout)
+            if args.mqtt:
+                run_mqtt_mode(
+                    workout_type=selected_workout_type,
+                    random_seed=args.seed,
+                    interval_seconds=args.interval,
+                )
+            else:
+                run_forever(
+                    workout_type=selected_workout_type,
+                    random_seed=args.seed,
+                    interval_seconds=args.interval,
+                )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc

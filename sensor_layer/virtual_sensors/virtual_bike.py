@@ -7,6 +7,11 @@ from typing import Any
 
 from common.message_schema import build_sensor_message
 from config_layer import settings
+from config_layer.training_profiles import (
+    DEFAULT_WORKOUT_TYPE,
+    get_training_profile,
+    normalize_workout_type,
+)
 from sensor_layer.virtual_sensors.cadence_sensor import VirtualCadenceSensor
 from sensor_layer.virtual_sensors.heart_rate_sensor import VirtualHeartRateSensor
 from sensor_layer.virtual_sensors.proximity_sensor import VirtualProximitySensor
@@ -21,10 +26,13 @@ class VirtualBike:
         self,
         device_id: str = settings.DEVICE_ID,
         session_id: str = settings.DEFAULT_SESSION_ID,
+        workout_type: str | None = None,
         random_seed: int | None = settings.DEFAULT_RANDOM_SEED,
     ) -> None:
         self.device_id = device_id
         self.session_id = session_id
+        self.workout_type = DEFAULT_WORKOUT_TYPE
+        self.set_workout_type(workout_type or DEFAULT_WORKOUT_TYPE)
         self.display_active = settings.DEFAULT_DISPLAY_ACTIVE
         self.display_message = settings.DEFAULT_DISPLAY_MESSAGE
         self.speaker_message = settings.DEFAULT_SPEAKER_MESSAGE
@@ -48,6 +56,11 @@ class VirtualBike:
 
         self._latest_message: dict[str, Any] | None = None
 
+    def set_workout_type(self, workout_type: str) -> None:
+        """Set the selected workout type for future sensor messages."""
+        get_training_profile(workout_type)
+        self.workout_type = normalize_workout_type(workout_type)
+
     def update(self) -> dict[str, Any]:
         """Update all sensors in dependency order and return the message."""
         speed_kmh = self.speed_sensor.update()
@@ -65,6 +78,7 @@ class VirtualBike:
         self._latest_message = build_sensor_message(
             device_id=self.device_id,
             session_id=self.session_id,
+            workout_type=self.workout_type,
             speed_kmh=speed_kmh,
             cadence_rpm=cadence_rpm,
             heart_rate_bpm=heart_rate_bpm,

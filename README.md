@@ -25,6 +25,7 @@ iot-bike-trainer/
 ├── alert_layer/
 │   └── email_or_sms_alerts/
 ├── config_layer/
+│   ├── training_profiles.py
 │   ├── settings.py
 │   ├── thresholds.py
 │   └── thresholds_and_settings/
@@ -42,6 +43,15 @@ Run the simulator from the project root:
 python main_virtual_bike.py
 ```
 
+When no workout type is provided, the simulator asks you to choose one from
+the terminal before readings start.
+
+Run with a workout type directly:
+
+```bash
+python main_virtual_bike.py --workout cadence
+```
+
 Run a quick 10-reading schema check:
 
 ```bash
@@ -51,6 +61,25 @@ python main_virtual_bike.py --self-test
 The virtual layer is intentionally separate from MQTT, SQLite, Streamlit,
 alerts, and AI rules so it can later be replaced by real Raspberry Pi sensors
 while keeping the same final message format.
+
+## Phase 1: Training Goal Profiles
+
+Workout profiles live in `config_layer/training_profiles.py`. The supported
+workout types are `speed`, `cadence`, `endurance`, and `vo2_max`.
+
+For now, the workout type is selected from the terminal or with the `--workout`
+argument. Later, this selection can come from the application without changing
+the virtual sensor logic.
+
+Examples:
+
+```bash
+python main_virtual_bike.py
+python main_virtual_bike.py --workout cadence
+python main_virtual_bike.py --mqtt --workout endurance
+```
+
+Each generated sensor message includes the selected `workout_type`.
 
 ## Rider Feedback System
 
@@ -79,7 +108,7 @@ python main_backend.py
 Then run the virtual bike MQTT publisher in another terminal:
 
 ```bash
-python main_virtual_bike.py --mqtt
+python main_virtual_bike.py --mqtt --workout endurance
 ```
 
 The backend subscribes to the sensor, status, and command topics and stores
