@@ -60,32 +60,16 @@ class CommandHandler:
             self.bike.set_speaker_message(message)
             return self._result(True, command, "Speaker message updated")
 
-        if command == "SET_FEEDBACK":
-            display_active = command_data.get("display_active")
-            display_message = command_data.get(
-                "display_message",
-                getattr(self.bike, "display_message", settings.DEFAULT_DISPLAY_MESSAGE),
+        if command in {"SET_FEEDBACK", "UPDATE_FEEDBACK"}:
+            self._apply_feedback(command_data)
+            return self._result(
+                True,
+                command,
+                "Rider feedback updated",
+                decision_type=command_data.get("decision_type"),
+                recommended_action=command_data.get("recommended_action"),
+                workout_type=command_data.get("workout_type"),
             )
-            speaker_message = command_data.get(
-                "speaker_message",
-                getattr(self.bike, "speaker_message", settings.DEFAULT_SPEAKER_MESSAGE),
-            )
-            alert_level = command_data.get(
-                "alert_level",
-                getattr(self.bike, "alert_level", settings.DEFAULT_ALERT_LEVEL),
-            )
-            alert_side = command_data.get(
-                "alert_side",
-                getattr(self.bike, "alert_side", settings.DEFAULT_ALERT_SIDE),
-            )
-            self.bike.set_feedback(
-                display_active=display_active,
-                display_message=str(display_message),
-                speaker_message=str(speaker_message),
-                alert_level=str(alert_level),
-                alert_side=str(alert_side),
-            )
-            return self._result(True, command, "Rider feedback updated")
 
         if command == "CLEAR_FEEDBACK":
             self.bike.clear_feedback()
@@ -134,6 +118,32 @@ class CommandHandler:
             return parsed if isinstance(parsed, dict) else None
 
         return None
+
+    def _apply_feedback(self, command_data: dict[str, Any]) -> None:
+        display_active = command_data.get("display_active")
+        display_message = command_data.get(
+            "display_message",
+            getattr(self.bike, "display_message", settings.DEFAULT_DISPLAY_MESSAGE),
+        )
+        speaker_message = command_data.get(
+            "speaker_message",
+            getattr(self.bike, "speaker_message", settings.DEFAULT_SPEAKER_MESSAGE),
+        )
+        alert_level = command_data.get(
+            "alert_level",
+            getattr(self.bike, "alert_level", settings.DEFAULT_ALERT_LEVEL),
+        )
+        alert_side = command_data.get(
+            "alert_side",
+            getattr(self.bike, "alert_side", settings.DEFAULT_ALERT_SIDE),
+        )
+        self.bike.set_feedback(
+            display_active=display_active,
+            display_message=str(display_message),
+            speaker_message=str(speaker_message),
+            alert_level=str(alert_level),
+            alert_side=str(alert_side),
+        )
 
     def _start_session(self) -> None:
         if hasattr(self.bike, "start_session"):

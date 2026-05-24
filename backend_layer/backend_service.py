@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ai_decision_layer.decision_engine import DecisionEngine
+from ai_decision_layer.decision_result import DecisionResult
 from common.message_schema import validate_sensor_message
 from common.time_utils import get_current_timestamp
 from config_layer.settings import DEFAULT_SESSION_ID, DEVICE_ID
 from database_layer.sqlite_storage import (
     save_command,
+    save_decision_log,
     save_sensor_reading,
     save_status_message,
     start_session,
@@ -20,24 +23,55 @@ from database_layer.sqlite_storage import (
 class BackendService:
     """Parse MQTT payloads and store accepted records in SQLite."""
 
-    def handle_sensor_message(self, payload: str | bytes) -> None:
-        """Validate and save one sensor reading payload."""
+    def __init__(self, decision_engine: DecisionEngine | None = None) -> None:
+        self.decision_engine = decision_engine or DecisionEngine()
+
+    def handle_sensor_message(
+        self,
+        payload: str | bytes,
+        source_topic: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Validate, save, analyze, and return an optional feedback command."""
         payload_text = _payload_to_text(payload)
         message = _parse_json_object(payload_text)
 
         if message is None:
             print("Ignored invalid sensor payload: not a JSON object.")
-            return
+            return None
 
         if not validate_sensor_message(message):
             print("Ignored invalid sensor payload: schema validation failed.")
-            return
+            return None
 
         save_sensor_reading(message)
         print(
             "Saved sensor reading "
             f"{message['device_id']} {message['timestamp']}."
         )
+
+        try:
+            decision = self.decision_engine.analyze(message)
+        except ValueError as exc:
+            print(f"Skipped decision for invalid workout type: {exc}")
+            return None
+
+        print(
+            f"Decision for {message['device_id']}: {decision.display_message} "
+            f"| alert={decision.alert_level} "
+            f"| action={decision.recommended_action}"
+        )
+        try:
+            save_decision_log(message, decision, source_topic=source_topic)
+            print(
+                f"Saved decision log: device={message['device_id']} "
+                f"session={message['session_id']} "
+                f"alert={decision.alert_level} "
+                f"action={decision.recommended_action}"
+            )
+        except Exception as exc:
+            print(f"Failed to save decision log: {exc}")
+
+        return build_feedback_command(decision)
 
     def handle_status_message(self, topic: str, payload: str | bytes) -> None:
         """Save one raw status payload."""
@@ -91,3 +125,19 @@ def _parse_json_object(payload: str) -> dict[str, Any] | None:
         return None
 
     return parsed if isinstance(parsed, dict) else None
+
+
+def build_feedback_command(decision: DecisionResult) -> dict[str, Any]:
+    """Build an MQTT command payload from a decision result."""
+    decision_data = decision.to_dict()
+    return {
+        "command": "update_feedback",
+        "display_active": decision_data["display_active"],
+        "display_message": decision_data["display_message"],
+        "speaker_message": decision_data["speaker_message"],
+        "alert_level": decision_data["alert_level"],
+        "alert_side": decision_data["alert_side"],
+        "decision_type": decision_data["decision_type"],
+        "recommended_action": decision_data["recommended_action"],
+        "workout_type": decision_data["workout_type"],
+    }

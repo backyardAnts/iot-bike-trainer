@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from config_layer.mqtt_topics import COMMAND_TOPIC, SENSOR_TOPIC, STATUS_TOPIC
-from mqtt_layer.mqtt_client import create_mqtt_client
+from mqtt_layer.publisher import MqttPublisher
 
 
 class MqttBackendReceiver:
@@ -14,10 +14,14 @@ class MqttBackendReceiver:
     def __init__(self, backend_service: Any) -> None:
         self.backend_service = backend_service
         self.client: Any | None = None
+        self.publisher: MqttPublisher | None = None
 
     def start(self) -> None:
         """Connect to MQTT, subscribe to backend topics, and start the loop."""
+        from mqtt_layer.mqtt_client import create_mqtt_client
+
         self.client = create_mqtt_client()
+        self.publisher = MqttPublisher(self.client)
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.client.loop_start()
@@ -34,6 +38,7 @@ class MqttBackendReceiver:
         self.client.loop_stop()
         self.client.disconnect()
         self.client = None
+        self.publisher = None
 
     def _subscribe(self, topic: str) -> None:
         if self.client is None:
@@ -65,7 +70,12 @@ class MqttBackendReceiver:
 
     def _on_message(self, client: Any, userdata: object, message: Any) -> None:
         if message.topic == SENSOR_TOPIC:
-            self.backend_service.handle_sensor_message(message.payload)
+            feedback_command = self.backend_service.handle_sensor_message(
+                message.payload,
+                source_topic=message.topic,
+            )
+            if feedback_command is not None:
+                self._publish_feedback_command(feedback_command)
             return
 
         if message.topic == STATUS_TOPIC:
@@ -77,3 +87,11 @@ class MqttBackendReceiver:
             return
 
         print(f"Ignored message from unexpected topic: {message.topic}")
+
+    def _publish_feedback_command(self, feedback_command: dict[str, Any]) -> None:
+        if self.publisher is None:
+            print("Could not publish feedback command: MQTT publisher is not ready.")
+            return
+
+        if self.publisher.publish_json(COMMAND_TOPIC, feedback_command):
+            print(f"Published feedback command to {COMMAND_TOPIC}")

@@ -7,6 +7,71 @@ from typing import Any
 from database_layer.db_connection import get_db_connection
 
 
+INSERT_DECISION_LOG = """
+INSERT INTO decision_logs (
+    device_id,
+    session_id,
+    timestamp,
+    workout_type,
+    decision_type,
+    alert_level,
+    alert_side,
+    display_active,
+    display_message,
+    speaker_message,
+    recommended_action,
+    source_topic
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+SELECT_RECENT_DECISION_LOGS = """
+SELECT *
+FROM decision_logs
+ORDER BY id DESC
+LIMIT ?
+"""
+
+COUNT_DECISIONS_BY_ALERT_LEVEL = """
+SELECT alert_level, COUNT(*) AS count
+FROM decision_logs
+GROUP BY alert_level
+ORDER BY alert_level
+"""
+
+COUNT_DECISIONS_BY_TYPE = """
+SELECT decision_type, COUNT(*) AS count
+FROM decision_logs
+GROUP BY decision_type
+ORDER BY decision_type
+"""
+
+INSERT_SESSION_ANALYTICS = """
+INSERT INTO session_analytics (
+    session_id,
+    timestamp,
+    average_speed_kmh,
+    average_cadence_rpm,
+    average_heart_rate_bpm,
+    max_heart_rate_bpm,
+    min_heart_rate_bpm,
+    total_readings,
+    session_duration_seconds,
+    time_in_zone_easy,
+    time_in_zone_moderate,
+    time_in_zone_hard,
+    time_in_zone_peak,
+    improvement_message
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+SELECT_RECENT_SESSION_ANALYTICS = """
+SELECT *
+FROM session_analytics
+ORDER BY id DESC
+LIMIT ?
+"""
+
+
 def get_latest_reading() -> dict[str, Any] | None:
     """Return the newest sensor reading, or None when no data exists."""
     with get_db_connection() as connection:
@@ -98,6 +163,44 @@ def get_settings() -> dict[str, str]:
         ).fetchall()
 
     return {row["key"]: row["value"] for row in rows}
+
+
+def get_recent_decision_logs(limit: int = 50) -> list[dict[str, Any]]:
+    """Return recent decision logs, newest first."""
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            SELECT_RECENT_DECISION_LOGS,
+            (_safe_limit(limit),),
+        ).fetchall()
+
+    return [_row_to_dict(row) for row in rows]
+
+
+def count_decisions_by_alert_level() -> list[dict[str, Any]]:
+    """Return decision counts grouped by alert level."""
+    with get_db_connection() as connection:
+        rows = connection.execute(COUNT_DECISIONS_BY_ALERT_LEVEL).fetchall()
+
+    return [_row_to_dict(row) for row in rows]
+
+
+def count_decisions_by_type() -> list[dict[str, Any]]:
+    """Return decision counts grouped by decision type."""
+    with get_db_connection() as connection:
+        rows = connection.execute(COUNT_DECISIONS_BY_TYPE).fetchall()
+
+    return [_row_to_dict(row) for row in rows]
+
+
+def get_recent_session_analytics(limit: int = 20) -> list[dict[str, Any]]:
+    """Return recently saved session analytics summaries, newest first."""
+    with get_db_connection() as connection:
+        rows = connection.execute(
+            SELECT_RECENT_SESSION_ANALYTICS,
+            (_safe_limit(limit),),
+        ).fetchall()
+
+    return [_row_to_dict(row) for row in rows]
 
 
 def _safe_limit(limit: int) -> int:

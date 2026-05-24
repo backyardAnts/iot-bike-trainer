@@ -8,6 +8,7 @@ from typing import Any
 from common.time_utils import get_current_timestamp
 from config_layer import thresholds
 from database_layer.db_connection import get_db_connection
+from database_layer.queries import INSERT_DECISION_LOG, INSERT_SESSION_ANALYTICS
 
 
 def save_sensor_reading(message: dict[str, Any]) -> None:
@@ -88,6 +89,58 @@ def save_command(payload: dict[str, Any] | str) -> None:
             VALUES (?, ?, ?)
             """,
             (command, payload_text, get_current_timestamp()),
+        )
+
+
+def save_decision_log(
+    sensor_message: dict[str, Any],
+    decision: Any,
+    source_topic: str | None = None,
+) -> None:
+    """Save one backend decision made for a sensor message."""
+    decision_data = _decision_to_dict(decision)
+
+    with get_db_connection() as connection:
+        connection.execute(
+            INSERT_DECISION_LOG,
+            (
+                str(sensor_message["device_id"]),
+                sensor_message.get("session_id"),
+                str(sensor_message["timestamp"]),
+                decision_data.get("workout_type", sensor_message.get("workout_type")),
+                str(decision_data["decision_type"]),
+                str(decision_data["alert_level"]),
+                decision_data.get("alert_side"),
+                int(bool(decision_data.get("display_active", False))),
+                decision_data.get("display_message"),
+                decision_data.get("speaker_message"),
+                decision_data.get("recommended_action"),
+                source_topic,
+            ),
+        )
+
+
+def save_session_analytics(analytics: dict[str, Any]) -> None:
+    """Save one calculated session analytics summary."""
+    with get_db_connection() as connection:
+        connection.execute(
+            INSERT_SESSION_ANALYTICS,
+            (
+                str(analytics["session_id"]),
+                get_current_timestamp(),
+                float(analytics["average_speed_kmh"]),
+                float(analytics["average_cadence_rpm"]),
+                float(analytics["average_heart_rate_bpm"]),
+                int(analytics["max_heart_rate_bpm"]),
+                int(analytics["min_heart_rate_bpm"]),
+                int(analytics["total_readings"]),
+                int(analytics["session_duration_seconds"]),
+                int(analytics["time_in_zone_easy"]),
+                int(analytics["time_in_zone_moderate"]),
+                int(analytics["time_in_zone_hard"]),
+                int(analytics["time_in_zone_peak"]),
+                str(analytics["improvement_vs_previous_session"]),
+            ),
         )
 
 
@@ -200,6 +253,18 @@ def save_alert(alert: dict[str, Any]) -> None:
 def _extract_command(payload: dict[str, Any]) -> str | None:
     command = payload.get("command")
     return str(command).strip().upper() if command else None
+
+
+def _decision_to_dict(decision: Any) -> dict[str, Any]:
+    if isinstance(decision, dict):
+        return decision
+
+    if hasattr(decision, "to_dict"):
+        decision_data = decision.to_dict()
+        if isinstance(decision_data, dict):
+            return decision_data
+
+    raise TypeError("decision must be a dictionary or expose to_dict()")
 
 
 def _parse_json_object(payload: str) -> dict[str, Any] | None:

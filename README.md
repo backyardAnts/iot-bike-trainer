@@ -5,6 +5,7 @@ Project architecture:
 ```text
 iot-bike-trainer/
 ├── main_virtual_bike.py
+├── main_session_analytics.py
 ├── common/
 │   ├── time_utils.py
 │   └── message_schema.py
@@ -20,6 +21,8 @@ iot-bike-trainer/
 │   └── sqlite_storage/
 ├── ai_decision_layer/
 │   └── physical_ai_rules/
+├── analytics_layer/
+│   └── session_analytics.py
 ├── dashboard_layer/
 │   └── streamlit_dashboard/
 ├── alert_layer/
@@ -81,6 +84,175 @@ python main_virtual_bike.py --mqtt --workout endurance
 
 Each generated sensor message includes the selected `workout_type`.
 
+## Phase 2: Local Decision Layer
+
+The local decision layer lives in `ai_decision_layer/`. It is rule-based for
+now, not machine learning. Safety rules apply to all workouts, heart-rate rules
+use the rider age from `config_layer/rider_profile.py`, and workout-specific
+feedback depends on the selected workout type.
+
+Run the simulator with local decisions:
+
+```bash
+python main_virtual_bike.py --workout cadence --decisions
+python main_virtual_bike.py --workout speed --decisions
+python main_virtual_bike.py --self-test
+```
+
+When `--decisions` is enabled, each reading is analyzed locally and printed
+with a recommended action. This flag is still useful for local-only decision
+testing without the backend.
+
+## Phase 3: MQTT Backend Feedback Loop
+
+The full MQTT flow connects the virtual bike, backend, rule-based decision
+layer, and rider feedback fields:
+
+```text
+virtual bike publishes sensors
+backend receives sensors
+backend runs DecisionEngine
+backend publishes update_feedback command
+virtual bike receives command and updates feedback fields
+```
+
+Test it with two terminals.
+
+Terminal 1:
+
+```bash
+python main_backend.py
+```
+
+Terminal 2:
+
+```bash
+python main_virtual_bike.py --mqtt --workout cadence
+```
+
+Expected behavior:
+
+- The bike publishes sensor messages to `anthony/bike_001/sensors`.
+- The backend saves valid sensor messages, runs the decision layer, and prints
+  the selected decision.
+- The backend publishes feedback commands to `anthony/bike_001/commands`.
+- The virtual bike receives `update_feedback` commands and future sensor
+  messages show updated `display_active`, `display_message`, `speaker_message`,
+  `alert_level`, and `alert_side` fields.
+
+Backend decisions are also written to SQLite by the Phase 4 decision log flow.
+Analytics and dashboard/app support are planned for later phases.
+
+## Phase 4: Decision Logs in SQLite
+
+The backend now stores every generated decision in the `decision_logs` table.
+Each row records the device, session, sensor timestamp, workout type, decision
+type, alert level, display message, speaker message, recommended action, source
+MQTT topic, and creation time.
+
+This prepares the project for future analytics, such as counting warnings,
+tracking how often the rider was told to increase cadence, and comparing
+sessions. Analytics and dashboard/app support are not implemented yet.
+
+Run the full feedback loop:
+
+Terminal 1:
+
+```bash
+python main_backend.py
+```
+
+Terminal 2:
+
+```bash
+python main_virtual_bike.py --mqtt --workout cadence
+```
+
+Inspect recent decision logs with the SQLite CLI:
+
+```bash
+sqlite3 data/bike_trainer.db
+```
+
+Then run:
+
+```sql
+SELECT id, timestamp, workout_type, decision_type, alert_level,
+       recommended_action, display_message
+FROM decision_logs
+ORDER BY id DESC
+LIMIT 10;
+```
+
+Or inspect with Python if the `sqlite3` CLI is unavailable:
+
+```bash
+python -c "import sqlite3; conn=sqlite3.connect('data/bike_trainer.db'); cur=conn.cursor(); print(cur.execute('SELECT id, timestamp, workout_type, decision_type, alert_level, recommended_action, display_message FROM decision_logs ORDER BY id DESC LIMIT 10').fetchall())"
+```
+
+Example row meaning: `workout_type=cadence`, `decision_type=workout`,
+`alert_level=info`, and `recommended_action=increase_cadence` means the backend
+decided the rider should increase cadence and sent that feedback to the bike.
+
+## Phase 5: Session Analytics
+
+The analytics layer lives in `analytics_layer/`. It calculates session-level
+training statistics from stored SQLite sensor readings:
+
+- average speed
+- average cadence
+- average heart rate
+- min and max heart rate
+- total readings
+- session duration
+- time in easy, moderate, hard, and peak heart-rate zones
+- comparison against the previous session
+
+Heart-rate zones are simple defaults for now:
+
+- easy: heart rate below `120`
+- moderate: `120` to `149`
+- hard: `150` to `169`
+- peak: `170` and above
+
+Run the latest-session analytics demo:
+
+```bash
+python main_session_analytics.py
+```
+
+Analyze a specific session:
+
+```bash
+python main_session_analytics.py --session session_001
+```
+
+Print analytics without saving a summary row:
+
+```bash
+python main_session_analytics.py --no-save
+```
+
+Run the analytics self-test:
+
+```bash
+python main_session_analytics.py --self-test
+```
+
+The demo prints a readable report and saves a summary into the
+`session_analytics` table by default. The saved table is a summary cache; the
+source of truth remains the raw `sensor_readings` table.
+
+Inspect saved analytics:
+
+```sql
+SELECT session_id, average_speed_kmh, average_cadence_rpm,
+       average_heart_rate_bpm, improvement_message
+FROM session_analytics
+ORDER BY id DESC
+LIMIT 10;
+```
+
 ## Rider Feedback System
 
 The old virtual buzzer field has been replaced with rider feedback fields in
@@ -112,6 +284,6 @@ python main_virtual_bike.py --mqtt --workout endurance
 ```
 
 The backend subscribes to the sensor, status, and command topics and stores
-messages in `data/bike_trainer.db`. The database layer also creates session,
-settings, and future alerts tables, but it does not add AI rules, Streamlit,
-hardware output, or external alerts.
+messages in `data/bike_trainer.db`. Current phases also store decision logs and
+optional session analytics summaries. Streamlit, hardware output, external
+alerts, and advanced analytics are still future work.
