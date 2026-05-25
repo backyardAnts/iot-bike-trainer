@@ -1,0 +1,111 @@
+"""Production GrovePi ultrasonic side-distance sensors."""
+
+from __future__ import annotations
+
+import time
+from typing import Any, Optional, Tuple
+
+from sensor_layer.real_sensors.grovepi_imports import get_grovepi_error, load_grovepi
+
+
+class UltrasonicSensors(object):
+    """Read left and right Grove ultrasonic sensors in meters."""
+
+    def __init__(
+        self,
+        left_port: int = 5,
+        right_port: int = 6,
+        fallback_distance_m: float = 5.0,
+        between_read_delay_seconds: float = 0.06,
+    ) -> None:
+        self.left_port = int(left_port)
+        self.right_port = int(right_port)
+        self.fallback_distance_m = float(fallback_distance_m)
+        self.between_read_delay_seconds = float(between_read_delay_seconds)
+        self.grovepi = load_grovepi()
+        self._last_left_m = None  # type: Optional[float]
+        self._last_right_m = None  # type: Optional[float]
+        self._last_errors = {}  # type: dict
+
+        if self.grovepi is None:
+            self._warn_once(
+                "both",
+                "Ultrasonic sensors disabled: GrovePi import failed: {}".format(
+                    get_grovepi_error()
+                ),
+            )
+
+    def read(self) -> Tuple[float, float]:
+        """Return left_distance_m and right_distance_m."""
+        left_distance_m = self._read_one(
+            "left",
+            self.left_port,
+            self._last_left_m,
+        )
+        self._last_left_m = left_distance_m
+
+        time.sleep(self.between_read_delay_seconds)
+
+        right_distance_m = self._read_one(
+            "right",
+            self.right_port,
+            self._last_right_m,
+        )
+        self._last_right_m = right_distance_m
+
+        return left_distance_m, right_distance_m
+
+    def _read_one(
+        self,
+        side: str,
+        port: int,
+        last_valid_m: Optional[float],
+    ) -> float:
+        if self.grovepi is None:
+            return self._fallback(last_valid_m)
+
+        try:
+            raw_cm = self.grovepi.ultrasonicRead(port)
+        except Exception as exc:
+            self._warn_once(
+                side,
+                "Ultrasonic {} D{} read failed: {}".format(side, port, exc),
+            )
+            return self._fallback(last_valid_m)
+
+        clean_cm = self._clean_distance_cm(raw_cm)
+        if clean_cm is None:
+            return self._fallback(last_valid_m)
+
+        return clean_cm / 100.0
+
+    def _clean_distance_cm(self, value: Any) -> Optional[float]:
+        if value is None:
+            return None
+
+        try:
+            distance_cm = float(value)
+        except (TypeError, ValueError):
+            return None
+
+        if distance_cm <= 0:
+            return None
+        if distance_cm == 65535:
+            return None
+        if distance_cm < 2:
+            return None
+        if distance_cm > 400:
+            return None
+
+        return distance_cm
+
+    def _fallback(self, last_valid_m: Optional[float]) -> float:
+        if last_valid_m is not None:
+            return last_valid_m
+        return self.fallback_distance_m
+
+    def _warn_once(self, key: str, message: str) -> None:
+        if self._last_errors.get(key) == message:
+            return
+        self._last_errors[key] = message
+        print(message)

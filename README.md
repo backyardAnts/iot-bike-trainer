@@ -145,6 +145,36 @@ Expected behavior:
 Backend decisions are also written to SQLite by the Phase 4 decision log flow.
 Analytics and dashboard/app support are planned for later phases.
 
+## Real Raspberry Pi/GrovePi Hardware Mode
+
+The project can now read physical GrovePi sensors and publish the same sensor
+JSON format to MQTT.
+
+Run real hardware mode with MQTT:
+
+```bash
+python3 main_virtual_bike.py --real --mqtt --interval 1
+```
+
+Alternative convenience entry point:
+
+```bash
+python3 main_real_bike.py --mqtt --interval 1
+```
+
+Hardware port assignments:
+
+- D2: temperature/humidity sensor
+- D3: speed Hall sensor
+- D4: cadence Hall sensor
+- D5: left ultrasonic sensor
+- D6: right ultrasonic sensor
+- D7: buzzer
+- I2C: Grove LCD screen
+
+Real mode defaults to MQTT broker `localhost` and publishes to the existing
+sensor topic unless `--broker` or `--topic` is provided.
+
 ## Phase 4: Decision Logs in SQLite
 
 The backend now stores every generated decision in the `decision_logs` table.

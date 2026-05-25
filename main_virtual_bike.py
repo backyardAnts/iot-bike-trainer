@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import time
-from typing import Any
+from typing import Any, Optional
 
 from ai_decision_layer.decision_engine import DecisionEngine
 from ai_decision_layer.decision_result import DecisionResult
@@ -14,6 +14,7 @@ from config_layer.settings import (
     DEFAULT_SAMPLE_INTERVAL_SECONDS,
 )
 from config_layer.training_profiles import (
+    DEFAULT_WORKOUT_TYPE,
     TRAINING_PROFILES,
     WORKOUT_TYPES,
     get_training_profile,
@@ -113,6 +114,111 @@ def run_mqtt_mode(
             client.loop_stop()
             client.disconnect()
         print("Virtual bike MQTT simulator stopped.")
+
+
+def run_real_mode(
+    workout_type: str = DEFAULT_WORKOUT_TYPE,
+    session_id: Optional[str] = None,
+    interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
+    mqtt_enabled: bool = False,
+    broker_host: str = "localhost",
+    broker_port: int = 1883,
+    sensor_topic: Optional[str] = None,
+    heart_rate_bpm: int = 120,
+) -> None:
+    """Read physical GrovePi sensors and optionally publish them to MQTT."""
+    from config_layer.mqtt_topics import SENSOR_TOPIC
+    from mqtt_layer.publisher import MqttPublisher
+    from sensor_layer.real_sensors.real_bike import RealBike
+
+    bike = RealBike(
+        session_id=session_id,
+        workout_type=workout_type,
+        heart_rate_bpm=heart_rate_bpm,
+    )
+    profile = get_training_profile(bike.workout_type)
+    topic = sensor_topic or SENSOR_TOPIC
+    client: Any | None = None
+    publisher: MqttPublisher | None = None
+
+    try:
+        if mqtt_enabled:
+            client = _create_real_mqtt_client(broker_host, broker_port)
+            if client is not None:
+                publisher = MqttPublisher(client)
+                publisher.publish_status(
+                    "started",
+                    {
+                        "device_id": bike.device_id,
+                        "session_id": bike.session_id,
+                        "workout_type": bike.workout_type,
+                        "mode": "real",
+                    },
+                )
+
+        print("Real GrovePi bike mode started. Press Ctrl+C to stop.")
+        print(f"Workout type: {profile['display_name']}")
+        print(f"Session ID: {bike.session_id}")
+        if mqtt_enabled and publisher is not None:
+            print(f"Publishing real sensor JSON to MQTT topic: {topic}")
+        elif mqtt_enabled:
+            print("MQTT unavailable; real sensor JSON will only print locally.")
+
+        while True:
+            message = bike.update()
+            print(message_to_json(message), flush=True)
+            if not validate_sensor_message(message):
+                print("Warning: real sensor message failed schema validation.")
+            if publisher is not None:
+                publisher.publish_json(topic, message)
+            time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        print("\nReal GrovePi bike mode stopping.")
+    finally:
+        if publisher is not None:
+            publisher.publish_status("stopped", {"mode": "real"})
+        if client is not None:
+            try:
+                client.loop_stop()
+                client.disconnect()
+            except Exception as exc:
+                print(f"MQTT cleanup failed: {exc}")
+        bike.cleanup()
+        print("Real GrovePi bike mode stopped.")
+
+
+def _create_real_mqtt_client(broker_host: str, broker_port: int) -> Optional[Any]:
+    """Create a lightweight MQTT client for real hardware mode."""
+    import uuid
+
+    try:
+        import paho.mqtt.client as mqtt
+    except ImportError as exc:
+        print(f"MQTT disabled: paho-mqtt is not installed: {exc}")
+        return None
+
+    client_id = f"real_bike_001_{uuid.uuid4().hex[:8]}"
+    if hasattr(mqtt, "CallbackAPIVersion"):
+        client = mqtt.Client(
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+            client_id=client_id,
+            protocol=mqtt.MQTTv311,
+        )
+    else:
+        client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
+
+    try:
+        print(f"Connecting real-mode MQTT client to {broker_host}:{broker_port}...")
+        client.connect(broker_host, int(broker_port), 60)
+        client.loop_start()
+        return client
+    except Exception as exc:
+        print(f"MQTT connection failed; continuing without MQTT: {exc}")
+        try:
+            client.disconnect()
+        except Exception:
+            pass
+        return None
 
 
 def run_self_test(reading_count: int = 10) -> None:
@@ -338,6 +444,10 @@ def run_decision_log_storage_self_test(decision: DecisionResult) -> None:
             connection.row_factory = sqlite3.Row
             try:
                 yield connection
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
             finally:
                 connection.close()
 
@@ -551,9 +661,14 @@ def choose_workout_type(workout_type: str | None = None) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Virtual bike simulator")
     parser.add_argument(
+        "--real",
+        action="store_true",
+        help="read physical Raspberry Pi/GrovePi sensors instead of virtual sensors",
+    )
+    parser.add_argument(
         "--mqtt",
         action="store_true",
-        help="publish virtual bike messages to MQTT",
+        help="publish bike sensor messages to MQTT",
     )
     parser.add_argument(
         "--self-test",
@@ -582,6 +697,27 @@ def parse_args() -> argparse.Namespace:
         help="optional explicit session ID for this simulator run",
     )
     parser.add_argument(
+        "--heart-rate",
+        type=int,
+        default=120,
+        help="manual heart rate value for real hardware mode",
+    )
+    parser.add_argument(
+        "--broker",
+        default="localhost",
+        help="MQTT broker host for real hardware mode",
+    )
+    parser.add_argument(
+        "--mqtt-port",
+        type=int,
+        default=1883,
+        help="MQTT broker port for real hardware mode",
+    )
+    parser.add_argument(
+        "--topic",
+        help="MQTT sensor topic for real hardware mode",
+    )
+    parser.add_argument(
         "--decisions",
         action="store_true",
         help="print local rule-based decisions for each sensor reading",
@@ -594,6 +730,22 @@ if __name__ == "__main__":
     try:
         if args.self_test:
             run_self_test()
+        elif args.real:
+            selected_workout_type = (
+                choose_workout_type(args.workout)
+                if args.workout is not None
+                else DEFAULT_WORKOUT_TYPE
+            )
+            run_real_mode(
+                workout_type=selected_workout_type,
+                session_id=args.session_id,
+                interval_seconds=args.interval,
+                mqtt_enabled=args.mqtt,
+                broker_host=args.broker,
+                broker_port=args.mqtt_port,
+                sensor_topic=args.topic,
+                heart_rate_bpm=args.heart_rate,
+            )
         else:
             selected_workout_type = choose_workout_type(args.workout)
             if args.mqtt:

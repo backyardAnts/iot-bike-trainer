@@ -1,7 +1,9 @@
 """Build, serialize, and lightly validate virtual bike sensor messages."""
 
+from __future__ import annotations
+
 import json
-from typing import Any
+from typing import Any, Dict
 
 from common.time_utils import get_current_timestamp
 from config_layer.settings import ALLOWED_ALERT_LEVELS, ALLOWED_ALERT_SIDES
@@ -10,6 +12,7 @@ from config_layer.training_profiles import (
     is_valid_workout_type,
     normalize_workout_type,
 )
+
 ## used to define the structure of the message
 
 REQUIRED_SENSOR_MESSAGE_KEYS = (
@@ -28,6 +31,11 @@ REQUIRED_SENSOR_MESSAGE_KEYS = (
     "speaker_message",
     "alert_level",
     "alert_side",
+)
+
+REAL_SENSOR_MESSAGE_KEYS = REQUIRED_SENSOR_MESSAGE_KEYS + (
+    "buzzer_state",
+    "led_state",
 )
 
 LEGACY_SENSOR_MESSAGE_KEYS = tuple(
@@ -50,12 +58,14 @@ def build_sensor_message(
     speaker_message: str,
     alert_level: str,
     alert_side: str,
-) -> dict[str, Any]:
+    buzzer_state: Any = None,
+    led_state: Any = None,
+) -> Dict[str, Any]:
     """Create the standard JSON-ready bike sensor message."""
     get_training_profile(workout_type)
     normalized_workout_type = normalize_workout_type(workout_type)
 
-    return {
+    message = {
         "device_id": str(device_id),
         "timestamp": get_current_timestamp(),
         "session_id": str(session_id),
@@ -72,14 +82,19 @@ def build_sensor_message(
         "alert_level": str(alert_level),
         "alert_side": str(alert_side),
     }
+    if buzzer_state is not None:
+        message["buzzer_state"] = bool(buzzer_state)
+    if led_state is not None:
+        message["led_state"] = bool(led_state)
+    return message
 
 
-def message_to_json(message: dict[str, Any]) -> str:
+def message_to_json(message: Dict[str, Any]) -> str:
     """Convert a sensor message dictionary to compact JSON text."""
     return json.dumps(message, separators=(",", ":"))
 
 
-def validate_sensor_message(message: dict[str, Any]) -> bool:
+def validate_sensor_message(message: Dict[str, Any]) -> bool:
     """Return True when a message has the expected keys and basic types."""
     if not isinstance(message, dict):
         return False
@@ -88,6 +103,7 @@ def validate_sensor_message(message: dict[str, Any]) -> bool:
     has_workout_type = "workout_type" in message
     if message_keys not in (
         set(REQUIRED_SENSOR_MESSAGE_KEYS),
+        set(REAL_SENSOR_MESSAGE_KEYS),
         set(LEGACY_SENSOR_MESSAGE_KEYS),
     ):
         return False
@@ -128,6 +144,10 @@ def validate_sensor_message(message: dict[str, Any]) -> bool:
     if message["alert_level"] not in ALLOWED_ALERT_LEVELS:
         return False
     if message["alert_side"] not in ALLOWED_ALERT_SIDES:
+        return False
+    if "buzzer_state" in message and not isinstance(message["buzzer_state"], bool):
+        return False
+    if "led_state" in message and not isinstance(message["led_state"], bool):
         return False
 
     return True
