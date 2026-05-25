@@ -130,6 +130,7 @@ def run_real_mode(
     wheel_diameter_cm: float = 70.0,
     speed_magnets_per_rotation: int = 1,
     cadence_magnets_per_rotation: int = 1,
+    enable_hall: bool = False,
     hall_debug: bool = False,
 ) -> None:
     """Read physical GrovePi sensors and optionally publish them to MQTT."""
@@ -146,6 +147,7 @@ def run_real_mode(
         wheel_diameter_cm=wheel_diameter_cm,
         speed_magnets_per_rotation=speed_magnets_per_rotation,
         cadence_magnets_per_rotation=cadence_magnets_per_rotation,
+        enable_hall=enable_hall,
         hall_debug=hall_debug,
     )
     profile = get_training_profile(bike.workout_type)
@@ -171,6 +173,13 @@ def run_real_mode(
         print("Real GrovePi bike mode started. Press Ctrl+C to stop.")
         print(f"Workout type: {profile['display_name']}")
         print(f"Session ID: {bike.session_id}")
+        active_hardware = ["ultrasonic D5/D6", "buzzer D7"]
+        if lcd_enabled:
+            active_hardware.append("LCD I2C")
+        if enable_hall:
+            active_hardware.append("Hall D3/D4")
+        print("Active hardware: {}".format(", ".join(active_hardware)))
+        print("Hall sensors: {}".format("enabled" if enable_hall else "disabled"))
         if mqtt_enabled and publisher is not None:
             print(f"Publishing real sensor JSON to MQTT topic: {topic}")
         elif mqtt_enabled:
@@ -755,6 +764,11 @@ def parse_args() -> argparse.Namespace:
         help="cadence Hall magnet passes per crank rotation",
     )
     parser.add_argument(
+        "--enable-hall",
+        action="store_true",
+        help="enable real D3/D4 Hall speed and cadence sensors",
+    )
+    parser.add_argument(
         "--hall-debug",
         action="store_true",
         help="print real Hall sensor raw values and event counts",
@@ -790,6 +804,7 @@ if __name__ == "__main__":
                 wheel_diameter_cm=args.wheel_diameter_cm,
                 speed_magnets_per_rotation=args.speed_magnets_per_rotation,
                 cadence_magnets_per_rotation=args.cadence_magnets_per_rotation,
+                enable_hall=args.enable_hall,
                 hall_debug=args.hall_debug,
             )
         else:

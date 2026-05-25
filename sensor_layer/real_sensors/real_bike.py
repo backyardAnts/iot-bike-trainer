@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from common.message_schema import build_sensor_message
 from common.session_manager import get_next_session_id
@@ -14,7 +14,6 @@ from config_layer.training_profiles import (
     normalize_workout_type,
 )
 from sensor_layer.real_sensors.buzzer_controller import BuzzerController
-from sensor_layer.real_sensors.hall_sensor_counter import SpeedCadenceHallSensors
 from sensor_layer.real_sensors.lcd_controller import LcdController
 from sensor_layer.real_sensors.ultrasonic_sensors import UltrasonicSensors
 
@@ -38,6 +37,7 @@ class RealBike(object):
         wheel_diameter_cm: float = 70.0,
         speed_magnets_per_rotation: int = 1,
         cadence_magnets_per_rotation: int = 1,
+        enable_hall: bool = False,
         hall_debug: bool = False,
     ) -> None:
         self.device_id = str(device_id)
@@ -48,17 +48,19 @@ class RealBike(object):
             else get_next_session_id(session_counter_file)
         )
         self.heart_rate_bpm = int(heart_rate_bpm)
+        self.enable_hall = bool(enable_hall)
         self.hall_debug = bool(hall_debug)
+        self._last_hall_error = ""  # type: str
 
         self.ultrasonic_sensors = UltrasonicSensors(left_port=5, right_port=6)
-        self.hall_sensors = SpeedCadenceHallSensors(
-            speed_port=3,
-            cadence_port=4,
-            wheel_diameter_cm=wheel_diameter_cm,
-            speed_magnets_per_rotation=speed_magnets_per_rotation,
-            cadence_magnets_per_rotation=cadence_magnets_per_rotation,
-            debug=hall_debug,
-        )
+        self.hall_sensors = None  # type: Optional[Any]
+        if self.enable_hall:
+            self.hall_sensors = self._create_hall_sensors(
+                wheel_diameter_cm,
+                speed_magnets_per_rotation,
+                cadence_magnets_per_rotation,
+                hall_debug,
+            )
         self.buzzer = BuzzerController(port=7)
         self.lcd = (
             LcdController(enabled=lcd_enabled, debug=lcd_debug)
@@ -78,7 +80,7 @@ class RealBike(object):
         """Read all physical sensors and return one JSON-ready dictionary."""
         left_distance_m, right_distance_m = self.ultrasonic_sensors.read()
         ultrasonic_status = self.ultrasonic_sensors.get_last_status()
-        speed_kmh, cadence_rpm = self.hall_sensors.read()
+        speed_kmh, cadence_rpm = self._read_hall_values()
 
         feedback = self._build_side_feedback(
             left_distance_m,
@@ -128,10 +130,64 @@ class RealBike(object):
 
     def cleanup(self) -> None:
         """Stop background hardware work and leave outputs off."""
-        self.hall_sensors.stop()
+        if self.hall_sensors is not None:
+            try:
+                self.hall_sensors.stop()
+            except Exception as exc:
+                self._warn_hall_once("Hall cleanup failed: {}".format(exc))
         self.buzzer.cleanup()
         if self.lcd is not None:
             self.lcd.cleanup()
+
+    def _create_hall_sensors(
+        self,
+        wheel_diameter_cm: float,
+        speed_magnets_per_rotation: int,
+        cadence_magnets_per_rotation: int,
+        hall_debug: bool,
+    ) -> Optional[Any]:
+        try:
+            from sensor_layer.real_sensors.hall_sensor_counter import (
+                SpeedCadenceHallSensors,
+            )
+
+            return SpeedCadenceHallSensors(
+                speed_port=3,
+                cadence_port=4,
+                wheel_diameter_cm=wheel_diameter_cm,
+                speed_magnets_per_rotation=speed_magnets_per_rotation,
+                cadence_magnets_per_rotation=cadence_magnets_per_rotation,
+                debounce_seconds=0.25,
+                debug=hall_debug,
+            )
+        except Exception as exc:
+            self._warn_hall_once(
+                "Hall sensors disabled after setup error: {}".format(exc)
+            )
+            return None
+
+    def _read_hall_values(self) -> Tuple[float, int]:
+        if self.hall_sensors is None:
+            return 0.0, 0
+
+        try:
+            speed_kmh, cadence_rpm = self.hall_sensors.read()
+        except Exception as exc:
+            self._warn_hall_once("Hall read failed; using 0 values: {}".format(exc))
+            return 0.0, 0
+
+        if speed_kmh < 0 or speed_kmh > 80.0:
+            self._warn_hall_once(
+                "Hall speed ignored: {:.2f} km/h is outside 0-80".format(speed_kmh)
+            )
+            speed_kmh = 0.0
+        if cadence_rpm < 0 or cadence_rpm > 180:
+            self._warn_hall_once(
+                "Hall cadence ignored: {} rpm is outside 0-180".format(cadence_rpm)
+            )
+            cadence_rpm = 0
+
+        return round(float(speed_kmh), 2), int(cadence_rpm)
 
     def _build_side_feedback(
         self,
@@ -229,12 +285,18 @@ class RealBike(object):
             speed=float(speed_kmh),
             cadence=int(cadence_rpm),
         )
-        if self.hall_debug:
+        if self.hall_debug and self.hall_sensors is not None:
             status_line = "{} | {}".format(
                 status_line,
                 self.hall_sensors.get_debug_text(),
             )
         return status_line
+
+    def _warn_hall_once(self, message: str) -> None:
+        if message == self._last_hall_error:
+            return
+        self._last_hall_error = message
+        print(message)
 
     def _format_distance_cm(self, raw_cm: Any, valid: bool) -> str:
         if not valid:

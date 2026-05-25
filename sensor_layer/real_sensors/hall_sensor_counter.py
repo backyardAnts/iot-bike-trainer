@@ -10,6 +10,10 @@ from typing import Any, Dict, Optional, Tuple
 from sensor_layer.real_sensors.grovepi_imports import get_grovepi_error, load_grovepi
 
 
+MAX_SPEED_KMH = 80.0
+MAX_CADENCE_RPM = 180
+
+
 class HallSensorCounter(object):
     """Poll one Hall sensor and count debounced raw state changes."""
 
@@ -17,15 +21,15 @@ class HallSensorCounter(object):
         self,
         port: int,
         label: str,
-        debounce_seconds: float = 0.10,
+        debounce_seconds: float = 0.25,
         magnets_per_rotation: int = 1,
-        poll_interval_seconds: float = 0.02,
+        poll_interval_seconds: float = 0.05,
         timeout_seconds: float = 3.0,
         debug: bool = False,
     ) -> None:
         self.port = int(port)
         self.label = str(label)
-        self.debounce_seconds = float(debounce_seconds)
+        self.debounce_seconds = max(0.25, float(debounce_seconds))
         self.magnets_per_rotation = max(1, int(magnets_per_rotation))
         self.poll_interval_seconds = float(poll_interval_seconds)
         self.timeout_seconds = float(timeout_seconds)
@@ -172,7 +176,7 @@ class SpeedCadenceHallSensors(object):
         wheel_diameter_cm: float = 70.0,
         speed_magnets_per_rotation: int = 1,
         cadence_magnets_per_rotation: int = 1,
-        debounce_seconds: float = 0.10,
+        debounce_seconds: float = 0.25,
         debug: bool = False,
     ) -> None:
         self.wheel_diameter_cm = float(wheel_diameter_cm)
@@ -194,6 +198,7 @@ class SpeedCadenceHallSensors(object):
         )
         self._speed_kmh = 0.0
         self._cadence_rpm = 0
+        self._last_error = ""
         self._last_speed_measurement = self.speed_counter.get_measurement()
         self._last_cadence_measurement = self.cadence_counter.get_measurement()
 
@@ -204,8 +209,10 @@ class SpeedCadenceHallSensors(object):
 
         speed_rps = float(self._last_speed_measurement["rotations_per_second"])
         cadence_rpm = float(self._last_cadence_measurement["rpm"])
-        self._speed_kmh = round(speed_rps * self.wheel_circumference_m * 3.6, 2)
-        self._cadence_rpm = int(round(cadence_rpm))
+        self._speed_kmh = self._clean_speed_kmh(
+            speed_rps * self.wheel_circumference_m * 3.6
+        )
+        self._cadence_rpm = self._clean_cadence_rpm(cadence_rpm)
         return self._speed_kmh, self._cadence_rpm
 
     def get_debug_text(self) -> str:
@@ -231,3 +238,37 @@ class SpeedCadenceHallSensors(object):
         if raw_value is None:
             return "INVALID"
         return str(raw_value)
+
+    def _clean_speed_kmh(self, value: float) -> float:
+        speed_kmh = round(float(value), 2)
+        if speed_kmh < 0:
+            return 0.0
+        if speed_kmh > MAX_SPEED_KMH:
+            self._warn_once(
+                "Hall speed ignored: {:.2f} km/h is above {}".format(
+                    speed_kmh,
+                    MAX_SPEED_KMH,
+                )
+            )
+            return 0.0
+        return speed_kmh
+
+    def _clean_cadence_rpm(self, value: float) -> int:
+        cadence_rpm = int(round(float(value)))
+        if cadence_rpm < 0:
+            return 0
+        if cadence_rpm > MAX_CADENCE_RPM:
+            self._warn_once(
+                "Hall cadence ignored: {} rpm is above {}".format(
+                    cadence_rpm,
+                    MAX_CADENCE_RPM,
+                )
+            )
+            return 0
+        return cadence_rpm
+
+    def _warn_once(self, message: str) -> None:
+        if message == self._last_error:
+            return
+        self._last_error = message
+        print(message)
