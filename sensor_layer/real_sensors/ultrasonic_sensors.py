@@ -15,7 +15,7 @@ class UltrasonicSensors(object):
         self,
         left_port: int = 5,
         right_port: int = 6,
-        fallback_distance_m: float = 5.0,
+        fallback_distance_m: float = 9.99,
         between_read_delay_seconds: float = 0.06,
     ) -> None:
         self.left_port = int(left_port)
@@ -120,7 +120,7 @@ class UltrasonicSensors(object):
 
     def _invalid_result(self, raw_cm: Any = None) -> Dict[str, Any]:
         return {
-            "distance_m": 9.99,
+            "distance_m": self.fallback_distance_m,
             "valid": False,
             "raw_cm": raw_cm,
         }

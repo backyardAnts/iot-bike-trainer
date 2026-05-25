@@ -124,7 +124,7 @@ def run_real_mode(
     broker_host: str = "localhost",
     broker_port: int = 1883,
     sensor_topic: Optional[str] = None,
-    heart_rate_bpm: int = 120,
+    heart_rate_bpm: int = 0,
     lcd_enabled: bool = True,
 ) -> None:
     """Read physical GrovePi sensors and optionally publish them to MQTT."""
@@ -704,8 +704,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--heart-rate",
         type=int,
-        default=120,
-        help="manual heart rate value for real hardware mode",
+        default=0,
+        help="placeholder heart rate value for real hardware mode",
     )
     parser.add_argument(
         "--broker",

@@ -14,14 +14,12 @@ from config_layer.training_profiles import (
     normalize_workout_type,
 )
 from sensor_layer.real_sensors.buzzer_controller import BuzzerController
-from sensor_layer.real_sensors.hall_sensor_counter import SpeedCadenceHallSensors
 from sensor_layer.real_sensors.lcd_controller import LcdController
-from sensor_layer.real_sensors.temperature_sensor import TemperatureSensor
 from sensor_layer.real_sensors.ultrasonic_sensors import UltrasonicSensors
 
 
 SAFE_ALERT_DISTANCE_CM = 999.0
-WARNING_THRESHOLD_CM = 20.0
+WARNING_THRESHOLD_CM = 50.0
 
 
 class RealBike(object):
@@ -32,7 +30,7 @@ class RealBike(object):
         device_id: str = settings.DEVICE_ID,
         session_id: Optional[str] = None,
         workout_type: str = DEFAULT_WORKOUT_TYPE,
-        heart_rate_bpm: int = 120,
+        heart_rate_bpm: int = 0,
         session_counter_file: Optional[Path] = None,
         lcd_enabled: bool = True,
     ) -> None:
@@ -45,13 +43,7 @@ class RealBike(object):
         )
         self.heart_rate_bpm = int(heart_rate_bpm)
 
-        self.temperature_sensor = TemperatureSensor(port=2, sensor_type=0)
         self.ultrasonic_sensors = UltrasonicSensors(left_port=5, right_port=6)
-        self.hall_sensors = SpeedCadenceHallSensors(
-            speed_port=3,
-            cadence_port=4,
-            wheel_circumference_m=2.10,
-        )
         self.buzzer = BuzzerController(port=7)
         self.lcd = LcdController(enabled=lcd_enabled) if lcd_enabled else None
         self._latest_message = None  # type: Optional[Dict[str, Any]]
@@ -59,11 +51,8 @@ class RealBike(object):
 
     def update(self) -> Dict[str, Any]:
         """Read all physical sensors and return one JSON-ready dictionary."""
-        temperature = self.temperature_sensor.read()
         left_distance_m, right_distance_m = self.ultrasonic_sensors.read()
         ultrasonic_status = self.ultrasonic_sensors.get_last_status()
-        speed_kmh = self.hall_sensors.read_speed_kmh()
-        cadence_rpm = self.hall_sensors.read_cadence_rpm()
 
         feedback = self._build_side_feedback(
             left_distance_m,
@@ -79,10 +68,10 @@ class RealBike(object):
             device_id=self.device_id,
             session_id=self.session_id,
             workout_type=self.workout_type,
-            speed_kmh=speed_kmh,
-            cadence_rpm=cadence_rpm,
+            speed_kmh=0.0,
+            cadence_rpm=0,
             heart_rate_bpm=self.heart_rate_bpm,
-            temperature_c=temperature["temperature_c"],
+            temperature_c=25.0,
             left_distance_m=left_distance_m,
             right_distance_m=right_distance_m,
             display_active=feedback["display_active"],
@@ -107,7 +96,6 @@ class RealBike(object):
 
     def cleanup(self) -> None:
         """Stop background hardware work and leave outputs off."""
-        self.hall_sensors.stop()
         self.buzzer.cleanup()
         if self.lcd is not None:
             self.lcd.cleanup()
@@ -138,7 +126,7 @@ class RealBike(object):
                 "speaker_message": "Objects on both sides",
                 "buzzer_state": True,
                 "lcd_line_1": "WARNING BOTH",
-                "lcd_line_2": "Object <20cm",
+                "lcd_line_2": "Object close",
             }
         if left_close:
             return {
@@ -149,7 +137,7 @@ class RealBike(object):
                 "speaker_message": "Object on left",
                 "buzzer_state": True,
                 "lcd_line_1": "WARNING LEFT",
-                "lcd_line_2": "Object <20cm",
+                "lcd_line_2": "Object close",
             }
         if right_close:
             return {
@@ -160,7 +148,7 @@ class RealBike(object):
                 "speaker_message": "Object on right",
                 "buzzer_state": True,
                 "lcd_line_1": "WARNING RIGHT",
-                "lcd_line_2": "Object <20cm",
+                "lcd_line_2": "Object close",
             }
 
         return {

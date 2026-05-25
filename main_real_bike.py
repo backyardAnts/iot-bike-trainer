@@ -35,8 +35,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--heart-rate",
         type=int,
-        default=120,
-        help="manual heart rate value until smartwatch support is added",
+        default=0,
+        help="placeholder heart rate value in simplified real mode",
     )
     parser.add_argument(
         "--broker",
