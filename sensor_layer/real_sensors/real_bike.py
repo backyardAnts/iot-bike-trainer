@@ -20,6 +20,10 @@ from sensor_layer.real_sensors.temperature_sensor import TemperatureSensor
 from sensor_layer.real_sensors.ultrasonic_sensors import UltrasonicSensors
 
 
+SAFE_ALERT_DISTANCE_CM = 999.0
+WARNING_THRESHOLD_CM = 20.0
+
+
 class RealBike(object):
     """Read all physical sensors and return the project sensor JSON dictionary."""
 
@@ -51,22 +55,25 @@ class RealBike(object):
         self.buzzer = BuzzerController(port=7)
         self.lcd = LcdController(enabled=lcd_enabled) if lcd_enabled else None
         self._latest_message = None  # type: Optional[Dict[str, Any]]
+        self._latest_status = ""  # type: str
 
     def update(self) -> Dict[str, Any]:
         """Read all physical sensors and return one JSON-ready dictionary."""
         temperature = self.temperature_sensor.read()
         left_distance_m, right_distance_m = self.ultrasonic_sensors.read()
+        ultrasonic_status = self.ultrasonic_sensors.get_last_status()
         speed_kmh = self.hall_sensors.read_speed_kmh()
         cadence_rpm = self.hall_sensors.read_cadence_rpm()
 
-        feedback = self._build_side_feedback(left_distance_m, right_distance_m)
+        feedback = self._build_side_feedback(
+            left_distance_m,
+            right_distance_m,
+            ultrasonic_status,
+        )
         buzzer_state = bool(feedback["buzzer_state"])
         self.buzzer.set_state(buzzer_state)
-        self._update_lcd(
-            feedback,
-            speed_kmh=speed_kmh,
-            cadence_rpm=cadence_rpm,
-        )
+        self._update_lcd(feedback)
+        self._latest_status = self._format_status_line(feedback, ultrasonic_status)
 
         self._latest_message = build_sensor_message(
             device_id=self.device_id,
@@ -88,6 +95,10 @@ class RealBike(object):
         )
         return self._latest_message
 
+    def get_latest_status_line(self) -> str:
+        """Return the latest terminal-friendly real hardware status line."""
+        return self._latest_status
+
     def get_current_reading(self) -> Dict[str, Any]:
         """Return the latest reading, updating once if needed."""
         if self._latest_message is None:
@@ -105,64 +116,100 @@ class RealBike(object):
         self,
         left_distance_m: float,
         right_distance_m: float,
+        ultrasonic_status: Dict[str, Any],
     ) -> Dict[str, Any]:
-        left_close = left_distance_m < 1.0
-        right_close = right_distance_m < 1.0
+        left_cm = self._alert_distance_cm(
+            left_distance_m,
+            bool(ultrasonic_status.get("left_valid")),
+        )
+        right_cm = self._alert_distance_cm(
+            right_distance_m,
+            bool(ultrasonic_status.get("right_valid")),
+        )
+        left_close = left_cm < WARNING_THRESHOLD_CM
+        right_close = right_cm < WARNING_THRESHOLD_CM
 
         if left_close and right_close:
             return {
                 "alert_level": "danger",
                 "alert_side": "both",
                 "display_active": True,
-                "display_message": "ALERT BOTH",
-                "speaker_message": "Vehicles both sides",
+                "display_message": "WARNING BOTH",
+                "speaker_message": "Objects on both sides",
                 "buzzer_state": True,
+                "lcd_line_1": "WARNING BOTH",
+                "lcd_line_2": "Object <20cm",
             }
         if left_close:
             return {
                 "alert_level": "warning",
                 "alert_side": "left",
                 "display_active": True,
-                "display_message": "ALERT LEFT",
-                "speaker_message": "Vehicle on left",
+                "display_message": "WARNING LEFT",
+                "speaker_message": "Object on left",
                 "buzzer_state": True,
+                "lcd_line_1": "WARNING LEFT",
+                "lcd_line_2": "Object <20cm",
             }
         if right_close:
             return {
                 "alert_level": "warning",
                 "alert_side": "right",
                 "display_active": True,
-                "display_message": "ALERT RIGHT",
-                "speaker_message": "Vehicle on right",
+                "display_message": "WARNING RIGHT",
+                "speaker_message": "Object on right",
                 "buzzer_state": True,
+                "lcd_line_1": "WARNING RIGHT",
+                "lcd_line_2": "Object <20cm",
             }
 
         return {
             "alert_level": "normal",
             "alert_side": "none",
             "display_active": False,
-            "display_message": "",
+            "display_message": "SAFE",
             "speaker_message": "",
             "buzzer_state": False,
+            "lcd_line_1": "SAFE",
+            "lcd_line_2": "No object close",
         }
 
-    def _update_lcd(
-        self,
-        feedback: Dict[str, Any],
-        speed_kmh: float,
-        cadence_rpm: int,
-    ) -> None:
+    def _update_lcd(self, feedback: Dict[str, Any]) -> None:
         if self.lcd is None:
             return
 
-        if feedback["display_active"]:
-            self.lcd.display(str(feedback["display_message"]), "Check side")
-            return
-
         self.lcd.display(
-            "BIKE READY",
-            "Spd:{:.0f} Cad:{:d}".format(speed_kmh, int(cadence_rpm)),
+            str(feedback["lcd_line_1"]),
+            str(feedback["lcd_line_2"]),
         )
+
+    def _format_status_line(
+        self,
+        feedback: Dict[str, Any],
+        ultrasonic_status: Dict[str, Any],
+    ) -> str:
+        return "LEFT: {left} | RIGHT: {right} | STATUS: {status} | BUZZER: {buzzer}".format(
+            left=self._format_distance_cm(
+                ultrasonic_status.get("left_raw_cm"),
+                bool(ultrasonic_status.get("left_valid")),
+            ),
+            right=self._format_distance_cm(
+                ultrasonic_status.get("right_raw_cm"),
+                bool(ultrasonic_status.get("right_valid")),
+            ),
+            status=str(feedback["display_message"]),
+            buzzer="ON" if feedback["buzzer_state"] else "OFF",
+        )
+
+    def _format_distance_cm(self, raw_cm: Any, valid: bool) -> str:
+        if not valid:
+            return "INVALID"
+        return "{:d} cm".format(int(round(float(raw_cm))))
+
+    def _alert_distance_cm(self, distance_m: float, valid: bool) -> float:
+        if not valid:
+            return SAFE_ALERT_DISTANCE_CM
+        return float(distance_m) * 100.0
 
     def _normalize_workout_type(self, workout_type: str) -> str:
         get_training_profile(workout_type)

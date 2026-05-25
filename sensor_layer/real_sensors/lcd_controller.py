@@ -18,6 +18,7 @@ class LcdController(object):
         self._set_rgb = None  # type: Optional[Callable[..., Any]]
         self.available = False
         self._last_error = ""
+        self._last_message = None  # type: Optional[str]
 
         if not enabled:
             return
@@ -39,6 +40,9 @@ class LcdController(object):
 
         line1 = self._short_line(line1)
         line2 = self._short_line(line2)
+        message = "{}\n{}".format(line1, line2)
+        if message == self._last_message:
+            return
 
         try:
             self._set_rgb(0, 128, 64)
@@ -47,7 +51,8 @@ class LcdController(object):
             return
 
         try:
-            self._set_text("{}\n{}".format(line1, line2))
+            self._set_text(message)
+            self._last_message = message
         except Exception as exc:
             self._disable_with_warning("LCD text failed; LCD disabled: {}".format(exc))
 
@@ -58,6 +63,7 @@ class LcdController(object):
 
         try:
             self._set_text("")
+            self._last_message = None
         except Exception as exc:
             self._disable_with_warning("LCD clear failed; LCD disabled: {}".format(exc))
 
@@ -72,6 +78,7 @@ class LcdController(object):
         self.available = False
         self._set_text = None
         self._set_rgb = None
+        self._last_message = None
         self._warn_once(message)
 
     def _warn_once(self, message: str) -> None:

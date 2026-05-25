@@ -168,6 +168,9 @@ def run_real_mode(
 
         while True:
             message = bike.update()
+            status_line = bike.get_latest_status_line()
+            if status_line:
+                print(status_line, flush=True)
             print(message_to_json(message), flush=True)
             if not validate_sensor_message(message):
                 print("Warning: real sensor message failed schema validation.")

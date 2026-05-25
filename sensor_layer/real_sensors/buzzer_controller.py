@@ -39,9 +39,13 @@ class BuzzerController(object):
         """Turn the buzzer off."""
         self.set_state(False)
 
-    def set_state(self, enabled: bool) -> None:
+    def set_state(self, enabled: bool, force: bool = False) -> None:
         """Set the buzzer state."""
-        self.enabled = bool(enabled)
+        next_enabled = bool(enabled)
+        if self.enabled == next_enabled and not force:
+            return
+
+        self.enabled = next_enabled
         if self.grovepi is None:
             return
 
@@ -58,7 +62,7 @@ class BuzzerController(object):
 
     def cleanup(self) -> None:
         """Always turn the buzzer off before exiting."""
-        self.off()
+        self.set_state(False, force=True)
 
     def _warn_once(self, message: str) -> None:
         if message == self._last_error:

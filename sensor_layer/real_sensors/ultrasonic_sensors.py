@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from sensor_layer.real_sensors.grovepi_imports import get_grovepi_error, load_grovepi
 
@@ -26,6 +26,12 @@ class UltrasonicSensors(object):
         self._last_left_m = None  # type: Optional[float]
         self._last_right_m = None  # type: Optional[float]
         self._last_errors = {}  # type: dict
+        self._last_status = {
+            "left_valid": False,
+            "right_valid": False,
+            "left_raw_cm": None,
+            "right_raw_cm": None,
+        }  # type: Dict[str, Any]
 
         if self.grovepi is None:
             self._warn_once(
@@ -37,32 +43,41 @@ class UltrasonicSensors(object):
 
     def read(self) -> Tuple[float, float]:
         """Return left_distance_m and right_distance_m."""
-        left_distance_m = self._read_one(
+        left_result = self._read_one(
             "left",
             self.left_port,
-            self._last_left_m,
         )
+        left_distance_m = left_result["distance_m"]
         self._last_left_m = left_distance_m
 
         time.sleep(self.between_read_delay_seconds)
 
-        right_distance_m = self._read_one(
+        right_result = self._read_one(
             "right",
             self.right_port,
-            self._last_right_m,
         )
+        right_distance_m = right_result["distance_m"]
         self._last_right_m = right_distance_m
+        self._last_status = {
+            "left_valid": left_result["valid"],
+            "right_valid": right_result["valid"],
+            "left_raw_cm": left_result["raw_cm"],
+            "right_raw_cm": right_result["raw_cm"],
+        }
 
         return left_distance_m, right_distance_m
+
+    def get_last_status(self) -> Dict[str, Any]:
+        """Return validity and raw cm information from the latest read."""
+        return dict(self._last_status)
 
     def _read_one(
         self,
         side: str,
         port: int,
-        last_valid_m: Optional[float],
-    ) -> float:
+    ) -> Dict[str, Any]:
         if self.grovepi is None:
-            return self._fallback(last_valid_m)
+            return self._invalid_result()
 
         try:
             raw_cm = self.grovepi.ultrasonicRead(port)
@@ -71,13 +86,17 @@ class UltrasonicSensors(object):
                 side,
                 "Ultrasonic {} D{} read failed: {}".format(side, port, exc),
             )
-            return self._fallback(last_valid_m)
+            return self._invalid_result(raw_cm=None)
 
         clean_cm = self._clean_distance_cm(raw_cm)
         if clean_cm is None:
-            return self._fallback(last_valid_m)
+            return self._invalid_result(raw_cm=raw_cm)
 
-        return clean_cm / 100.0
+        return {
+            "distance_m": clean_cm / 100.0,
+            "valid": True,
+            "raw_cm": clean_cm,
+        }
 
     def _clean_distance_cm(self, value: Any) -> Optional[float]:
         if value is None:
@@ -99,10 +118,12 @@ class UltrasonicSensors(object):
 
         return distance_cm
 
-    def _fallback(self, last_valid_m: Optional[float]) -> float:
-        if last_valid_m is not None:
-            return last_valid_m
-        return self.fallback_distance_m
+    def _invalid_result(self, raw_cm: Any = None) -> Dict[str, Any]:
+        return {
+            "distance_m": 9.99,
+            "valid": False,
+            "raw_cm": raw_cm,
+        }
 
     def _warn_once(self, key: str, message: str) -> None:
         if self._last_errors.get(key) == message:
