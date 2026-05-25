@@ -114,6 +114,22 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="print raw D3/D4 Hall values and counted events",
     )
+    parser.add_argument(
+        "--temperature-sensor-type",
+        type=int,
+        default=0,
+        help="Grove DHT sensor type for temperature/humidity sensor on D2",
+    )
+    parser.add_argument(
+        "--no-temperature",
+        action="store_true",
+        help="disable D2 temperature/humidity sensor",
+    )
+    parser.add_argument(
+        "--temperature-debug",
+        action="store_true",
+        help="print raw D2 temperature/humidity readings and fallback information",
+    )
     return parser.parse_args()
 
 
@@ -139,4 +155,7 @@ if __name__ == "__main__":
         cadence_magnets_per_rotation=args.cadence_magnets_per_rotation,
         enable_hall=not args.no_hall,
         hall_debug=args.hall_debug,
+        enable_temperature=not args.no_temperature,
+        temperature_sensor_type=args.temperature_sensor_type,
+        temperature_debug=args.temperature_debug,
     )

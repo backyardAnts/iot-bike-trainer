@@ -15,6 +15,7 @@ from config_layer.training_profiles import (
 )
 from sensor_layer.real_sensors.buzzer_controller import BuzzerController
 from sensor_layer.real_sensors.lcd_controller import LcdController
+from sensor_layer.real_sensors.temperature_sensor import TemperatureSensor
 from sensor_layer.real_sensors.ultrasonic_sensors import UltrasonicSensors
 
 
@@ -39,6 +40,9 @@ class RealBike(object):
         cadence_magnets_per_rotation: int = 1,
         enable_hall: bool = True,
         hall_debug: bool = False,
+        enable_temperature: bool = True,
+        temperature_sensor_type: int = 0,
+        temperature_debug: bool = False,
     ) -> None:
         self.device_id = str(device_id)
         self.workout_type = self._normalize_workout_type(workout_type)
@@ -50,9 +54,20 @@ class RealBike(object):
         self.heart_rate_bpm = int(heart_rate_bpm)
         self.enable_hall = bool(enable_hall)
         self.hall_debug = bool(hall_debug)
+        self.enable_temperature = bool(enable_temperature)
+        self.temperature_debug = bool(temperature_debug)
         self._last_hall_error = ""  # type: str
 
         self.ultrasonic_sensors = UltrasonicSensors(left_port=5, right_port=6)
+        self.temperature_sensor = None  # type: Optional[TemperatureSensor]
+        if self.enable_temperature:
+            self.temperature_sensor = TemperatureSensor(
+                port=2,
+                sensor_type=temperature_sensor_type,
+                fallback_temperature_c=25.0,
+                min_read_interval_seconds=2.0,
+                debug=temperature_debug,
+            )
         self.hall_sensors = None  # type: Optional[Any]
         if self.enable_hall:
             self.hall_sensors = self._create_hall_sensors(
@@ -69,6 +84,8 @@ class RealBike(object):
         )
         self._latest_message = None  # type: Optional[Dict[str, Any]]
         self._latest_status = ""  # type: str
+        self._latest_humidity_percent = None  # type: Optional[float]
+        self._last_temperature_error = ""  # type: str
 
     def show_startup_lcd_message(self) -> None:
         """Display a short startup LCD confirmation if LCD is enabled."""
@@ -81,6 +98,7 @@ class RealBike(object):
         left_distance_m, right_distance_m = self.ultrasonic_sensors.read()
         ultrasonic_status = self.ultrasonic_sensors.get_last_status()
         speed_kmh, cadence_rpm = self._read_hall_values()
+        temperature_c, humidity_percent = self._read_temperature_values()
 
         feedback = self._build_side_feedback(
             left_distance_m,
@@ -95,6 +113,7 @@ class RealBike(object):
             ultrasonic_status,
             speed_kmh,
             cadence_rpm,
+            temperature_c,
         )
 
         self._latest_message = build_sensor_message(
@@ -104,7 +123,7 @@ class RealBike(object):
             speed_kmh=speed_kmh,
             cadence_rpm=cadence_rpm,
             heart_rate_bpm=self.heart_rate_bpm,
-            temperature_c=25.0,
+            temperature_c=temperature_c,
             left_distance_m=left_distance_m,
             right_distance_m=right_distance_m,
             display_active=feedback["display_active"],
@@ -116,6 +135,7 @@ class RealBike(object):
             led_state=False,
         )
         self._latest_message["speed_kmh"] = round(float(speed_kmh), 2)
+        self._latest_humidity_percent = humidity_percent
         return self._latest_message
 
     def get_latest_status_line(self) -> str:
@@ -189,6 +209,30 @@ class RealBike(object):
             cadence_rpm = 0
 
         return round(float(speed_kmh), 2), int(cadence_rpm)
+
+    def _read_temperature_values(self) -> Tuple[float, Optional[float]]:
+        if self.temperature_sensor is None:
+            return 25.0, None
+
+        try:
+            reading = self.temperature_sensor.read()
+        except Exception as exc:
+            self._warn_temperature_once(
+                "Temperature read failed; using fallback: {}".format(exc)
+            )
+            return 25.0, None
+
+        temperature_c = reading.get("temperature_c")
+        humidity_percent = reading.get("humidity_percent")
+        if temperature_c is None:
+            return 25.0, humidity_percent
+        return round(float(temperature_c), 1), humidity_percent
+
+    def _warn_temperature_once(self, message: str) -> None:
+        if message == self._last_temperature_error:
+            return
+        self._last_temperature_error = message
+        print(message)
 
     def wait_between_updates(self, duration_seconds: float) -> None:
         """Wait between full sensor reads while polling Hall inputs if enabled."""
@@ -283,11 +327,12 @@ class RealBike(object):
         ultrasonic_status: Dict[str, Any],
         speed_kmh: float,
         cadence_rpm: int,
+        temperature_c: float,
     ) -> str:
         status_line = (
             "LEFT: {left} | RIGHT: {right} | STATUS: {status} | "
             "BUZZER: {buzzer} | SPEED: {speed:.1f} km/h | "
-            "CADENCE: {cadence:d} rpm"
+            "CADENCE: {cadence:d} rpm | TEMP: {temperature:.1f} C"
         ).format(
             left=self._format_distance_cm(
                 ultrasonic_status.get("left_raw_cm"),
@@ -301,6 +346,7 @@ class RealBike(object):
             buzzer="ON" if feedback["buzzer_state"] else "OFF",
             speed=float(speed_kmh),
             cadence=int(cadence_rpm),
+            temperature=float(temperature_c),
         )
         if self.hall_debug and self.hall_sensors is not None:
             status_line = "{} | {}".format(

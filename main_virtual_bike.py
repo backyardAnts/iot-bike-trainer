@@ -132,6 +132,9 @@ def run_real_mode(
     cadence_magnets_per_rotation: int = 1,
     enable_hall: bool = True,
     hall_debug: bool = False,
+    enable_temperature: bool = True,
+    temperature_sensor_type: int = 0,
+    temperature_debug: bool = False,
 ) -> None:
     """Read physical GrovePi sensors and optionally publish them to MQTT."""
     from config_layer.mqtt_topics import SENSOR_TOPIC
@@ -149,6 +152,9 @@ def run_real_mode(
         cadence_magnets_per_rotation=cadence_magnets_per_rotation,
         enable_hall=enable_hall,
         hall_debug=hall_debug,
+        enable_temperature=enable_temperature,
+        temperature_sensor_type=temperature_sensor_type,
+        temperature_debug=temperature_debug,
     )
     profile = get_training_profile(bike.workout_type)
     topic = sensor_topic or SENSOR_TOPIC
@@ -178,8 +184,15 @@ def run_real_mode(
             active_hardware.append("LCD I2C")
         if enable_hall:
             active_hardware.append("Hall D3/D4")
+        if enable_temperature:
+            active_hardware.append("temperature D2")
         print("Active hardware: {}".format(", ".join(active_hardware)))
         print("Hall sensors: {}".format("enabled" if enable_hall else "disabled"))
+        print(
+            "Temperature sensor: {}".format(
+                "enabled" if enable_temperature else "disabled"
+            )
+        )
         if mqtt_enabled and publisher is not None:
             print(f"Publishing real sensor JSON to MQTT topic: {topic}")
         elif mqtt_enabled:
@@ -779,6 +792,22 @@ def parse_args() -> argparse.Namespace:
         help="print real Hall sensor raw values and event counts",
     )
     parser.add_argument(
+        "--temperature-sensor-type",
+        type=int,
+        default=0,
+        help="Grove DHT sensor type for real temperature sensor on D2",
+    )
+    parser.add_argument(
+        "--no-temperature",
+        action="store_true",
+        help="disable real temperature/humidity sensor on D2",
+    )
+    parser.add_argument(
+        "--temperature-debug",
+        action="store_true",
+        help="print real temperature raw readings and fallback information",
+    )
+    parser.add_argument(
         "--decisions",
         action="store_true",
         help="print local rule-based decisions for each sensor reading",
@@ -811,6 +840,9 @@ if __name__ == "__main__":
                 cadence_magnets_per_rotation=args.cadence_magnets_per_rotation,
                 enable_hall=not args.no_hall,
                 hall_debug=args.hall_debug,
+                enable_temperature=not args.no_temperature,
+                temperature_sensor_type=args.temperature_sensor_type,
+                temperature_debug=args.temperature_debug,
             )
         else:
             selected_workout_type = choose_workout_type(args.workout)
