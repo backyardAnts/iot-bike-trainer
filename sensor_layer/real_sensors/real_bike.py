@@ -30,6 +30,7 @@ class RealBike(object):
         workout_type: str = DEFAULT_WORKOUT_TYPE,
         heart_rate_bpm: int = 120,
         session_counter_file: Optional[Path] = None,
+        lcd_enabled: bool = True,
     ) -> None:
         self.device_id = str(device_id)
         self.workout_type = self._normalize_workout_type(workout_type)
@@ -48,7 +49,7 @@ class RealBike(object):
             wheel_circumference_m=2.10,
         )
         self.buzzer = BuzzerController(port=7)
-        self.lcd = LcdController()
+        self.lcd = LcdController(enabled=lcd_enabled) if lcd_enabled else None
         self._latest_message = None  # type: Optional[Dict[str, Any]]
 
     def update(self) -> Dict[str, Any]:
@@ -97,7 +98,8 @@ class RealBike(object):
         """Stop background hardware work and leave outputs off."""
         self.hall_sensors.stop()
         self.buzzer.cleanup()
-        self.lcd.cleanup()
+        if self.lcd is not None:
+            self.lcd.cleanup()
 
     def _build_side_feedback(
         self,
@@ -150,6 +152,9 @@ class RealBike(object):
         speed_kmh: float,
         cadence_rpm: int,
     ) -> None:
+        if self.lcd is None:
+            return
+
         if feedback["display_active"]:
             self.lcd.display(str(feedback["display_message"]), "Check side")
             return

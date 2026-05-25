@@ -125,6 +125,7 @@ def run_real_mode(
     broker_port: int = 1883,
     sensor_topic: Optional[str] = None,
     heart_rate_bpm: int = 120,
+    lcd_enabled: bool = True,
 ) -> None:
     """Read physical GrovePi sensors and optionally publish them to MQTT."""
     from config_layer.mqtt_topics import SENSOR_TOPIC
@@ -135,6 +136,7 @@ def run_real_mode(
         session_id=session_id,
         workout_type=workout_type,
         heart_rate_bpm=heart_rate_bpm,
+        lcd_enabled=lcd_enabled,
     )
     profile = get_training_profile(bike.workout_type)
     topic = sensor_topic or SENSOR_TOPIC

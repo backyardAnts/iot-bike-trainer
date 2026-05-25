@@ -13,15 +13,22 @@ from sensor_layer.real_sensors.grovepi_imports import (
 class LcdController(object):
     """Write short two-line messages to the Grove I2C LCD."""
 
-    def __init__(self) -> None:
+    def __init__(self, enabled: bool = True) -> None:
+        self._set_text = None  # type: Optional[Callable[..., Any]]
+        self._set_rgb = None  # type: Optional[Callable[..., Any]]
+        self.available = False
+        self._last_error = ""
+
+        if not enabled:
+            return
+
         set_text, set_rgb = load_lcd_functions()
         self._set_text = set_text  # type: Optional[Callable[..., Any]]
         self._set_rgb = set_rgb  # type: Optional[Callable[..., Any]]
         self.available = callable(set_text) and callable(set_rgb)
-        self._last_error = ""
 
         if not self.available:
-            self._warn_once(
+            self._disable_with_warning(
                 "LCD disabled: Grove LCD import failed: {}".format(get_lcd_error())
             )
 
@@ -32,11 +39,17 @@ class LcdController(object):
 
         line1 = self._short_line(line1)
         line2 = self._short_line(line2)
+
         try:
             self._set_rgb(0, 128, 64)
+        except Exception as exc:
+            self._disable_with_warning("LCD color failed; LCD disabled: {}".format(exc))
+            return
+
+        try:
             self._set_text("{}\n{}".format(line1, line2))
         except Exception as exc:
-            self._warn_once("LCD display failed: {}".format(exc))
+            self._disable_with_warning("LCD text failed; LCD disabled: {}".format(exc))
 
     def clear(self) -> None:
         """Clear LCD text if available."""
@@ -46,7 +59,7 @@ class LcdController(object):
         try:
             self._set_text("")
         except Exception as exc:
-            self._warn_once("LCD clear failed: {}".format(exc))
+            self._disable_with_warning("LCD clear failed; LCD disabled: {}".format(exc))
 
     def cleanup(self) -> None:
         """Clear the LCD before exiting."""
@@ -55,8 +68,14 @@ class LcdController(object):
     def _short_line(self, value: str) -> str:
         return str(value)[:16]
 
+    def _disable_with_warning(self, message: str) -> None:
+        self.available = False
+        self._set_text = None
+        self._set_rgb = None
+        self._warn_once(message)
+
     def _warn_once(self, message: str) -> None:
-        if message == self._last_error:
+        if self._last_error:
             return
         self._last_error = message
         print(message)

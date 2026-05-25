@@ -53,6 +53,11 @@ def parse_args() -> argparse.Namespace:
         "--topic",
         help="MQTT sensor topic override",
     )
+    parser.add_argument(
+        "--no-lcd",
+        action="store_true",
+        help="skip LCD initialization, display, clear, and cleanup",
+    )
     return parser.parse_args()
 
 
@@ -67,4 +72,5 @@ if __name__ == "__main__":
         broker_port=args.mqtt_port,
         sensor_topic=args.topic,
         heart_rate_bpm=args.heart_rate,
+        lcd_enabled=not args.no_lcd,
     )
