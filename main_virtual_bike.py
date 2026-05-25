@@ -126,6 +126,7 @@ def run_real_mode(
     sensor_topic: Optional[str] = None,
     heart_rate_bpm: int = 0,
     lcd_enabled: bool = True,
+    lcd_debug: bool = False,
 ) -> None:
     """Read physical GrovePi sensors and optionally publish them to MQTT."""
     from config_layer.mqtt_topics import SENSOR_TOPIC
@@ -137,6 +138,7 @@ def run_real_mode(
         workout_type=workout_type,
         heart_rate_bpm=heart_rate_bpm,
         lcd_enabled=lcd_enabled,
+        lcd_debug=lcd_debug,
     )
     profile = get_training_profile(bike.workout_type)
     topic = sensor_topic or SENSOR_TOPIC
@@ -165,6 +167,10 @@ def run_real_mode(
             print(f"Publishing real sensor JSON to MQTT topic: {topic}")
         elif mqtt_enabled:
             print("MQTT unavailable; real sensor JSON will only print locally.")
+
+        bike.show_startup_lcd_message()
+        if lcd_enabled:
+            time.sleep(2.0)
 
         while True:
             message = bike.update()

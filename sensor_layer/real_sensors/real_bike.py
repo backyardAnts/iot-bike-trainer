@@ -33,6 +33,7 @@ class RealBike(object):
         heart_rate_bpm: int = 0,
         session_counter_file: Optional[Path] = None,
         lcd_enabled: bool = True,
+        lcd_debug: bool = False,
     ) -> None:
         self.device_id = str(device_id)
         self.workout_type = self._normalize_workout_type(workout_type)
@@ -45,9 +46,19 @@ class RealBike(object):
 
         self.ultrasonic_sensors = UltrasonicSensors(left_port=5, right_port=6)
         self.buzzer = BuzzerController(port=7)
-        self.lcd = LcdController(enabled=lcd_enabled) if lcd_enabled else None
+        self.lcd = (
+            LcdController(enabled=lcd_enabled, debug=lcd_debug)
+            if lcd_enabled
+            else None
+        )
         self._latest_message = None  # type: Optional[Dict[str, Any]]
         self._latest_status = ""  # type: str
+
+    def show_startup_lcd_message(self) -> None:
+        """Display a short startup LCD confirmation if LCD is enabled."""
+        if self.lcd is None:
+            return
+        self.lcd.display("BIKE READY", "LCD OK")
 
     def update(self) -> Dict[str, Any]:
         """Read all physical sensors and return one JSON-ready dictionary."""
