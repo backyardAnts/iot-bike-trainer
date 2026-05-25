@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-
+## this part just defines how each workout type has a different goal
 DEFAULT_WORKOUT_TYPE = "endurance"
 
 TRAINING_PROFILES: dict[str, dict[str, Any]] = {

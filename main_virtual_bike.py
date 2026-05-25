@@ -25,15 +25,21 @@ from sensor_layer.virtual_sensors.virtual_bike import VirtualBike
 
 def run_forever(
     workout_type: str,
+    session_id: str | None = None,
     random_seed: int | None = DEFAULT_RANDOM_SEED,
     interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
     decisions: bool = False,
 ) -> None:
     """Print one JSON sensor message per sample interval until Ctrl+C."""
-    bike = VirtualBike(workout_type=workout_type, random_seed=random_seed)
+    bike = VirtualBike(
+        session_id=session_id,
+        workout_type=workout_type,
+        random_seed=random_seed,
+    )
     profile = get_training_profile(bike.workout_type)
     decision_engine = DecisionEngine() if decisions else None
     print(f"Workout type: {profile['display_name']}")
+    print(f"Session ID: {bike.session_id}")
     print("Virtual bike simulator started. Press Ctrl+C to stop.")
 
     try:
@@ -47,6 +53,7 @@ def run_forever(
 
 def run_mqtt_mode(
     workout_type: str,
+    session_id: str | None = None,
     random_seed: int | None = DEFAULT_RANDOM_SEED,
     interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
     decisions: bool = False,
@@ -58,7 +65,11 @@ def run_mqtt_mode(
     from mqtt_layer.publisher import MqttPublisher
     from mqtt_layer.subscriber import MqttCommandSubscriber
 
-    bike = VirtualBike(workout_type=workout_type, random_seed=random_seed)
+    bike = VirtualBike(
+        session_id=session_id,
+        workout_type=workout_type,
+        random_seed=random_seed,
+    )
     profile = get_training_profile(bike.workout_type)
     decision_engine = DecisionEngine() if decisions else None
     client: Any | None = None
@@ -83,6 +94,7 @@ def run_mqtt_mode(
             },
         )
         print(f"Workout type: {profile['display_name']}")
+        print(f"Session ID: {bike.session_id}")
         print("Virtual bike MQTT simulator started. Press Ctrl+C to stop.")
 
         while True:
@@ -105,9 +117,15 @@ def run_mqtt_mode(
 
 def run_self_test(reading_count: int = 10) -> None:
     """Run a short deterministic simulation and validate each message."""
+    run_session_id_self_test()
+
     print("Testing valid workout types.")
     for workout_type in WORKOUT_TYPES:
-        bike = VirtualBike(workout_type=workout_type, random_seed=42)
+        bike = VirtualBike(
+            session_id=f"self_test_{workout_type}",
+            workout_type=workout_type,
+            random_seed=42,
+        )
         message = bike.update()
         if message.get("workout_type") != workout_type:
             raise RuntimeError(f"Unexpected workout type in message: {message}")
@@ -115,13 +133,17 @@ def run_self_test(reading_count: int = 10) -> None:
             raise RuntimeError(f"Invalid sensor message: {message}")
 
     try:
-        VirtualBike(workout_type="invalid")
+        VirtualBike(session_id="self_test_invalid", workout_type="invalid")
     except ValueError:
         print("Invalid workout type rejected.")
     else:
         raise RuntimeError("Invalid workout type was accepted.")
 
-    bike = VirtualBike(workout_type="endurance", random_seed=42)
+    bike = VirtualBike(
+        session_id="self_test_endurance",
+        workout_type="endurance",
+        random_seed=42,
+    )
     print(f"Running virtual bike self-test for {reading_count} readings.")
 
     for _ in range(reading_count):
@@ -134,6 +156,84 @@ def run_self_test(reading_count: int = 10) -> None:
 
     run_decision_self_test()
     print("Self-test passed.")
+
+
+def run_session_id_self_test() -> None:
+    """Verify persistent session ID generation without using project data."""
+    import tempfile
+    from pathlib import Path
+
+    from common.session_manager import (
+        format_session_id,
+        get_next_session_id,
+        read_current_session_number,
+        reset_session_counter,
+        save_current_session_number,
+    )
+
+    print("Testing dynamic session IDs.")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        counter_path = Path(temp_dir) / "session_counter.txt"
+
+        if get_next_session_id(counter_path) != "session_001":
+            raise RuntimeError("First generated session ID was not session_001.")
+        if get_next_session_id(counter_path) != "session_002":
+            raise RuntimeError("Second generated session ID was not session_002.")
+        if read_current_session_number(counter_path) != 2:
+            raise RuntimeError("Session counter did not save the current number.")
+        if format_session_id(10) != "session_010":
+            raise RuntimeError("Session ID zero-padding is incorrect.")
+
+        save_current_session_number(5, counter_path)
+        if get_next_session_id(counter_path) != "session_006":
+            raise RuntimeError("Session counter did not continue from saved value.")
+
+        reset_session_counter(counter_path)
+        if get_next_session_id(counter_path) != "session_001":
+            raise RuntimeError("Session counter reset did not restart at session_001.")
+
+        reset_session_counter(counter_path)
+        bike = VirtualBike(
+            workout_type="cadence",
+            random_seed=42,
+            session_counter_file=counter_path,
+        )
+        first_message = bike.update()
+        second_message = bike.update()
+        if bike.session_id != "session_001":
+            raise RuntimeError("VirtualBike did not use the generated session ID.")
+        if first_message["session_id"] != bike.session_id:
+            raise RuntimeError("First message did not include bike session ID.")
+        if second_message["session_id"] != bike.session_id:
+            raise RuntimeError("VirtualBike changed session ID between updates.")
+
+        reset_session_counter(counter_path)
+        first_bike = VirtualBike(
+            workout_type="cadence",
+            random_seed=42,
+            session_counter_file=counter_path,
+        )
+        second_bike = VirtualBike(
+            workout_type="cadence",
+            random_seed=42,
+            session_counter_file=counter_path,
+        )
+        if first_bike.session_id != "session_001":
+            raise RuntimeError("First separate bike did not get session_001.")
+        if second_bike.session_id != "session_002":
+            raise RuntimeError("Second separate bike did not get session_002.")
+
+        explicit_bike = VirtualBike(
+            session_id="session_test_01",
+            workout_type="cadence",
+            random_seed=42,
+            session_counter_file=counter_path,
+        )
+        explicit_message = explicit_bike.update()
+        if explicit_bike.session_id != "session_test_01":
+            raise RuntimeError("Explicit session ID was not preserved.")
+        if explicit_message["session_id"] != "session_test_01":
+            raise RuntimeError("Explicit session ID was not written to messages.")
 
 
 def run_decision_self_test() -> None:
@@ -216,6 +316,7 @@ def run_decision_log_storage_self_test(decision: DecisionResult) -> None:
     """Verify decision log storage against a temporary SQLite database."""
     import sqlite3
     import tempfile
+    from contextlib import contextmanager
     from pathlib import Path
 
     from database_layer.db_connection import SCHEMA_PATH
@@ -231,10 +332,14 @@ def run_decision_log_storage_self_test(decision: DecisionResult) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         database_path = Path(temp_dir) / "bike_trainer_test.db"
 
-        def get_test_db_connection() -> sqlite3.Connection:
+        @contextmanager
+        def get_test_db_connection():
             connection = sqlite3.connect(database_path)
             connection.row_factory = sqlite3.Row
-            return connection
+            try:
+                yield connection
+            finally:
+                connection.close()
 
         with get_test_db_connection() as connection:
             connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
@@ -242,6 +347,7 @@ def run_decision_log_storage_self_test(decision: DecisionResult) -> None:
         original_get_db_connection = sqlite_storage.get_db_connection
         sqlite_storage.get_db_connection = get_test_db_connection
         try:
+            sqlite_storage.initialize_default_settings()
             sqlite_storage.save_sensor_reading(sensor_message)
             sqlite_storage.save_decision_log(
                 sensor_message,
@@ -287,7 +393,11 @@ def run_backend_feedback_self_test(decision: DecisionResult) -> None:
     if feedback_command["command"] != "update_feedback":
         raise RuntimeError(f"Unexpected feedback command: {feedback_command}")
 
-    bike = VirtualBike(workout_type="cadence", random_seed=42)
+    bike = VirtualBike(
+        session_id="self_test_feedback",
+        workout_type="cadence",
+        random_seed=42,
+    )
     command_result = CommandHandler(bike).handle_command(feedback_command)
     if not command_result["ok"]:
         raise RuntimeError(f"Feedback command was rejected: {command_result}")
@@ -468,6 +578,10 @@ def parse_args() -> argparse.Namespace:
         help="workout type to simulate",
     )
     parser.add_argument(
+        "--session-id",
+        help="optional explicit session ID for this simulator run",
+    )
+    parser.add_argument(
         "--decisions",
         action="store_true",
         help="print local rule-based decisions for each sensor reading",
@@ -485,6 +599,7 @@ if __name__ == "__main__":
             if args.mqtt:
                 run_mqtt_mode(
                     workout_type=selected_workout_type,
+                    session_id=args.session_id,
                     random_seed=args.seed,
                     interval_seconds=args.interval,
                     decisions=args.decisions,
@@ -492,6 +607,7 @@ if __name__ == "__main__":
             else:
                 run_forever(
                     workout_type=selected_workout_type,
+                    session_id=args.session_id,
                     random_seed=args.seed,
                     interval_seconds=args.interval,
                     decisions=args.decisions,

@@ -6,9 +6,11 @@ Project architecture:
 iot-bike-trainer/
 ├── main_virtual_bike.py
 ├── main_session_analytics.py
+├── reset_project_data.py
 ├── common/
 │   ├── time_utils.py
-│   └── message_schema.py
+│   ├── message_schema.py
+│   └── session_manager.py
 ├── sensor_layer/
 │   ├── virtual_sensors/
 │   └── real_sensors_later/
@@ -193,6 +195,49 @@ python -c "import sqlite3; conn=sqlite3.connect('data/bike_trainer.db'); cur=con
 Example row meaning: `workout_type=cadence`, `decision_type=workout`,
 `alert_level=info`, and `recommended_action=increase_cadence` means the backend
 decided the rider should increase cadence and sent that feedback to the bike.
+
+## Dynamic Session IDs
+
+Each simulator run automatically gets a new persistent `session_id`. The session
+ID groups all sensor readings and backend decisions from one workout, which lets
+Phase 5 analytics compare the current workout against previous workouts.
+
+The counter is stored locally in `data/session_counter.txt`. If the last saved
+number is `5`, the next automatic run uses `session_006`. A single simulator run
+keeps the same session ID for every sensor message; the ID is not regenerated on
+each reading.
+
+Run with the next automatic session ID:
+
+```bash
+python main_virtual_bike.py --workout cadence
+```
+
+Override the session ID for testing:
+
+```bash
+python main_virtual_bike.py --workout cadence --session-id session_test_01
+```
+
+Startup output includes the selected session:
+
+```text
+Workout type: Cadence Training
+Session ID: session_002
+Virtual bike simulator started. Press Ctrl+C to stop.
+```
+
+## Starting Fresh
+
+Reset local generated data when you want a clean database and want the next
+automatic simulator run to start again at `session_001`:
+
+```bash
+python reset_project_data.py
+```
+
+The reset removes `data/bike_trainer.db` and `data/session_counter.txt` if they
+exist, then recreates the SQLite database from `database_layer/schema.sql`.
 
 ## Phase 5: Session Analytics
 

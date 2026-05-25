@@ -10,7 +10,7 @@ from config_layer.training_profiles import (
     is_valid_workout_type,
     normalize_workout_type,
 )
-
+## used to define the structure of the message
 
 REQUIRED_SENSOR_MESSAGE_KEYS = (
     "device_id",

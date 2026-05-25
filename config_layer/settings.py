@@ -32,6 +32,8 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+## here we are trying to load the dotenc enviroment, if .env does not exist we use the default values  for the mqtt broker...
+
 DEVICE_ID = "bike_001"
 DEFAULT_SESSION_ID = "session_001"
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 1
@@ -52,7 +54,7 @@ MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
 MQTT_USE_TLS = _env_bool("MQTT_USE_TLS", False)
 MQTT_KEEPALIVE_SECONDS = _env_int("MQTT_KEEPALIVE_SECONDS", 60)
 MQTT_CLIENT_ID_PREFIX = "anthony_bike_001"
-
+## everything below this part is just about adding max and minimum values for the VIRTUAL sensors since we started the project with virtual sensors. After adding the real sensors we will not be needing them anymore.
 MIN_SPEED_KMH = 0
 MAX_SPEED_KMH = 35
 

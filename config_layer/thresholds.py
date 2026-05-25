@@ -1,5 +1,7 @@
 """Global safety and health thresholds for rule-based decisions."""
 
+## this files defines the thresholds for the AI. The HR is a percentage value since everyone has a different max HR
+## The HR also should change based on what kind of workout he is doing
 SIDE_DISTANCE_WARNING_M = 1.5
 SIDE_DISTANCE_DANGER_M = 0.8
 

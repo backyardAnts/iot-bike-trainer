@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import random
+from pathlib import Path
 from typing import Any
 
 from common.message_schema import build_sensor_message
+from common.session_manager import get_next_session_id
 from config_layer import settings
 from config_layer.training_profiles import (
     DEFAULT_WORKOUT_TYPE,
@@ -25,14 +27,19 @@ class VirtualBike:
     def __init__(
         self,
         device_id: str = settings.DEVICE_ID,
-        session_id: str = settings.DEFAULT_SESSION_ID,
+        session_id: str | None = None,
         workout_type: str | None = None,
         random_seed: int | None = settings.DEFAULT_RANDOM_SEED,
+        session_counter_file: str | Path | None = None,
     ) -> None:
         self.device_id = device_id
-        self.session_id = session_id
         self.workout_type = DEFAULT_WORKOUT_TYPE
         self.set_workout_type(workout_type or DEFAULT_WORKOUT_TYPE)
+        self.session_id = (
+            str(session_id)
+            if session_id is not None
+            else get_next_session_id(session_counter_file)
+        )
         self.display_active = settings.DEFAULT_DISPLAY_ACTIVE
         self.display_message = settings.DEFAULT_DISPLAY_MESSAGE
         self.speaker_message = settings.DEFAULT_SPEAKER_MESSAGE
