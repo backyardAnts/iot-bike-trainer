@@ -130,7 +130,7 @@ def run_real_mode(
     wheel_diameter_cm: float = 70.0,
     speed_magnets_per_rotation: int = 1,
     cadence_magnets_per_rotation: int = 1,
-    enable_hall: bool = False,
+    enable_hall: bool = True,
     hall_debug: bool = False,
 ) -> None:
     """Read physical GrovePi sensors and optionally publish them to MQTT."""
@@ -199,7 +199,7 @@ def run_real_mode(
                 print("Warning: real sensor message failed schema validation.")
             if publisher is not None:
                 publisher.publish_json(topic, message)
-            time.sleep(interval_seconds)
+            bike.wait_between_updates(interval_seconds)
     except KeyboardInterrupt:
         print("\nReal GrovePi bike mode stopping.")
     finally:
@@ -766,7 +766,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--enable-hall",
         action="store_true",
-        help="enable real D3/D4 Hall speed and cadence sensors",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no-hall",
+        action="store_true",
+        help="disable real D3/D4 Hall speed and cadence sensors",
     )
     parser.add_argument(
         "--hall-debug",
@@ -804,7 +809,7 @@ if __name__ == "__main__":
                 wheel_diameter_cm=args.wheel_diameter_cm,
                 speed_magnets_per_rotation=args.speed_magnets_per_rotation,
                 cadence_magnets_per_rotation=args.cadence_magnets_per_rotation,
-                enable_hall=args.enable_hall,
+                enable_hall=not args.no_hall,
                 hall_debug=args.hall_debug,
             )
         else:

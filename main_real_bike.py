@@ -102,7 +102,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--enable-hall",
         action="store_true",
-        help="enable D3/D4 Hall speed and cadence sensors",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no-hall",
+        action="store_true",
+        help="disable D3/D4 Hall speed and cadence sensors",
     )
     parser.add_argument(
         "--hall-debug",
@@ -132,6 +137,6 @@ if __name__ == "__main__":
         wheel_diameter_cm=args.wheel_diameter_cm,
         speed_magnets_per_rotation=args.speed_magnets_per_rotation,
         cadence_magnets_per_rotation=args.cadence_magnets_per_rotation,
-        enable_hall=args.enable_hall,
+        enable_hall=not args.no_hall,
         hall_debug=args.hall_debug,
     )

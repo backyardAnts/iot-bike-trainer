@@ -26,6 +26,7 @@ class HallSensorCounter(object):
         poll_interval_seconds: float = 0.05,
         timeout_seconds: float = 3.0,
         debug: bool = False,
+        auto_start: bool = False,
     ) -> None:
         self.port = int(port)
         self.label = str(label)
@@ -34,6 +35,7 @@ class HallSensorCounter(object):
         self.poll_interval_seconds = float(poll_interval_seconds)
         self.timeout_seconds = float(timeout_seconds)
         self.debug = bool(debug)
+        self.auto_start = bool(auto_start)
         self.grovepi = load_grovepi()
 
         self._lock = threading.Lock()
@@ -62,7 +64,8 @@ class HallSensorCounter(object):
                 "{} D{} pinMode failed: {}".format(self.label, self.port, exc)
             )
 
-        self.start()
+        if self.auto_start:
+            self.start()
 
     def start(self) -> None:
         """Start background polling."""
@@ -178,6 +181,7 @@ class SpeedCadenceHallSensors(object):
         cadence_magnets_per_rotation: int = 1,
         debounce_seconds: float = 0.25,
         debug: bool = False,
+        background_polling: bool = False,
     ) -> None:
         self.wheel_diameter_cm = float(wheel_diameter_cm)
         self.wheel_circumference_m = math.pi * (self.wheel_diameter_cm / 100.0)
@@ -188,6 +192,7 @@ class SpeedCadenceHallSensors(object):
             debounce_seconds=debounce_seconds,
             magnets_per_rotation=speed_magnets_per_rotation,
             debug=debug,
+            auto_start=background_polling,
         )
         self.cadence_counter = HallSensorCounter(
             port=cadence_port,
@@ -195,12 +200,25 @@ class SpeedCadenceHallSensors(object):
             debounce_seconds=debounce_seconds,
             magnets_per_rotation=cadence_magnets_per_rotation,
             debug=debug,
+            auto_start=background_polling,
         )
         self._speed_kmh = 0.0
         self._cadence_rpm = 0
         self._last_error = ""
         self._last_speed_measurement = self.speed_counter.get_measurement()
         self._last_cadence_measurement = self.cadence_counter.get_measurement()
+
+    def poll_once(self) -> None:
+        """Poll both Hall inputs once without using background threads."""
+        self.speed_counter.poll_once()
+        self.cadence_counter.poll_once()
+
+    def poll_for(self, duration_seconds: float) -> None:
+        """Poll Hall inputs during the idle time between full sensor updates."""
+        end_time = time.monotonic() + max(0.0, float(duration_seconds))
+        while time.monotonic() < end_time:
+            self.poll_once()
+            time.sleep(self.speed_counter.poll_interval_seconds)
 
     def read(self) -> Tuple[float, int]:
         """Return speed_kmh and cadence_rpm."""
@@ -221,12 +239,15 @@ class SpeedCadenceHallSensors(object):
         cadence_raw = self._format_raw(self._last_cadence_measurement.get("raw_value"))
         return (
             "HALL DEBUG: SPEED D3 raw={speed_raw} events={speed_events} | "
-            "CADENCE D4 raw={cadence_raw} events={cadence_events}"
+            "CADENCE D4 raw={cadence_raw} events={cadence_events} | "
+            "speed={speed:.2f} km/h cadence={cadence:d} rpm"
         ).format(
             speed_raw=speed_raw,
             speed_events=self._last_speed_measurement.get("event_count", 0),
             cadence_raw=cadence_raw,
             cadence_events=self._last_cadence_measurement.get("event_count", 0),
+            speed=self._speed_kmh,
+            cadence=self._cadence_rpm,
         )
 
     def stop(self) -> None:

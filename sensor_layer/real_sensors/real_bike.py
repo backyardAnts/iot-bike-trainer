@@ -37,7 +37,7 @@ class RealBike(object):
         wheel_diameter_cm: float = 70.0,
         speed_magnets_per_rotation: int = 1,
         cadence_magnets_per_rotation: int = 1,
-        enable_hall: bool = False,
+        enable_hall: bool = True,
         hall_debug: bool = False,
     ) -> None:
         self.device_id = str(device_id)
@@ -159,6 +159,7 @@ class RealBike(object):
                 cadence_magnets_per_rotation=cadence_magnets_per_rotation,
                 debounce_seconds=0.25,
                 debug=hall_debug,
+                background_polling=False,
             )
         except Exception as exc:
             self._warn_hall_once(
@@ -188,6 +189,22 @@ class RealBike(object):
             cadence_rpm = 0
 
         return round(float(speed_kmh), 2), int(cadence_rpm)
+
+    def wait_between_updates(self, duration_seconds: float) -> None:
+        """Wait between full sensor reads while polling Hall inputs if enabled."""
+        if self.hall_sensors is None:
+            import time
+
+            time.sleep(duration_seconds)
+            return
+
+        try:
+            self.hall_sensors.poll_for(duration_seconds)
+        except Exception as exc:
+            self._warn_hall_once("Hall polling failed: {}".format(exc))
+            import time
+
+            time.sleep(duration_seconds)
 
     def _build_side_feedback(
         self,
