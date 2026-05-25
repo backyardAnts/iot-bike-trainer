@@ -1,10 +1,11 @@
-"""Production GrovePi Hall sensor event counters for speed and cadence."""
+"""Production GrovePi Hall sensor counters for speed and cadence."""
 
 from __future__ import annotations
 
+import math
 import threading
 import time
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
 
 from sensor_layer.real_sensors.grovepi_imports import get_grovepi_error, load_grovepi
 
@@ -14,30 +15,35 @@ class HallSensorCounter(object):
 
     def __init__(
         self,
-        label: str,
         port: int,
-        debounce_seconds: float = 0.08,
+        label: str,
+        debounce_seconds: float = 0.10,
+        magnets_per_rotation: int = 1,
         poll_interval_seconds: float = 0.02,
         timeout_seconds: float = 3.0,
+        debug: bool = False,
     ) -> None:
-        self.label = str(label)
         self.port = int(port)
+        self.label = str(label)
         self.debounce_seconds = float(debounce_seconds)
+        self.magnets_per_rotation = max(1, int(magnets_per_rotation))
         self.poll_interval_seconds = float(poll_interval_seconds)
         self.timeout_seconds = float(timeout_seconds)
+        self.debug = bool(debug)
         self.grovepi = load_grovepi()
 
         self._lock = threading.Lock()
         self._running = False
         self._thread = None  # type: Optional[threading.Thread]
-        self._previous_raw = None  # type: Optional[int]
+        self._raw_value = None  # type: Optional[int]
+        self._previous_raw_value = None  # type: Optional[int]
+        self._event_count = 0
         self._last_event_time = None  # type: Optional[float]
         self._previous_event_time = None  # type: Optional[float]
-        self._last_poll_error = ""
-        self._event_count = 0
+        self._last_error = ""
 
         if self.grovepi is None:
-            self._warn(
+            self._warn_once(
                 "{} Hall sensor disabled: GrovePi import failed: {}".format(
                     self.label,
                     get_grovepi_error(),
@@ -48,7 +54,7 @@ class HallSensorCounter(object):
         try:
             self.grovepi.pinMode(self.port, "INPUT")
         except Exception as exc:
-            self._warn(
+            self._warn_once(
                 "{} D{} pinMode failed: {}".format(self.label, self.port, exc)
             )
 
@@ -70,24 +76,44 @@ class HallSensorCounter(object):
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=1.0)
 
-    def get_event_count(self) -> int:
-        """Return total debounced state-change events."""
+    def get_measurement(self) -> Dict[str, Any]:
+        """Return raw value, event count, rotations per second, and RPM."""
         with self._lock:
-            return self._event_count
+            raw_value = self._raw_value
+            event_count = self._event_count
+            last_event_time = self._last_event_time
+            previous_event_time = self._previous_event_time
 
-    def get_latest_period_seconds(self) -> Optional[float]:
-        """Return seconds between the latest two valid events."""
-        with self._lock:
-            if self._last_event_time is None or self._previous_event_time is None:
-                return None
-            return self._last_event_time - self._previous_event_time
+        now = time.monotonic()
+        seconds_since_last_event = None  # type: Optional[float]
+        if last_event_time is not None:
+            seconds_since_last_event = now - last_event_time
 
-    def get_seconds_since_last_event(self) -> Optional[float]:
-        """Return seconds since the last event, or None if no event happened."""
-        with self._lock:
-            if self._last_event_time is None:
-                return None
-            return time.monotonic() - self._last_event_time
+        period_seconds = None  # type: Optional[float]
+        if last_event_time is not None and previous_event_time is not None:
+            period_seconds = last_event_time - previous_event_time
+
+        events_per_second = 0.0
+        if (
+            period_seconds is not None
+            and period_seconds > 0
+            and seconds_since_last_event is not None
+            and seconds_since_last_event <= self.timeout_seconds
+        ):
+            events_per_second = 1.0 / period_seconds
+
+        rotations_per_second = events_per_second / self.magnets_per_rotation
+        rpm = rotations_per_second * 60.0
+        return {
+            "raw_value": raw_value,
+            "event_count": event_count,
+            "last_event_time": last_event_time,
+            "period_seconds": period_seconds,
+            "seconds_since_last_event": seconds_since_last_event,
+            "events_per_second": events_per_second,
+            "rotations_per_second": rotations_per_second,
+            "rpm": rpm,
+        }
 
     def _poll_loop(self) -> None:
         while self._running:
@@ -95,14 +121,14 @@ class HallSensorCounter(object):
             time.sleep(self.poll_interval_seconds)
 
     def poll_once(self) -> None:
-        """Poll the digital input once and count a state-change event."""
+        """Read the digital input once and count state-change events."""
         if self.grovepi is None:
             return
 
         try:
             raw_value = int(self.grovepi.digitalRead(self.port))
         except Exception as exc:
-            self._warn(
+            self._warn_once(
                 "{} D{} read failed: {}".format(self.label, self.port, exc)
             )
             time.sleep(0.1)
@@ -110,87 +136,90 @@ class HallSensorCounter(object):
 
         now = time.monotonic()
         with self._lock:
-            if self._previous_raw is None:
-                self._previous_raw = raw_value
+            self._raw_value = raw_value
+            if self._previous_raw_value is None:
+                self._previous_raw_value = raw_value
                 return
 
-            if raw_value == self._previous_raw:
+            if raw_value == self._previous_raw_value:
                 return
 
+            self._previous_raw_value = raw_value
             if (
                 self._last_event_time is not None
                 and now - self._last_event_time < self.debounce_seconds
             ):
-                self._previous_raw = raw_value
                 return
 
-            self._previous_raw = raw_value
             self._previous_event_time = self._last_event_time
             self._last_event_time = now
             self._event_count += 1
 
-    def _warn(self, message: str) -> None:
-        if message == self._last_poll_error:
+    def _warn_once(self, message: str) -> None:
+        if message == self._last_error:
             return
-        self._last_poll_error = message
+        self._last_error = message
         print(message)
 
 
 class SpeedCadenceHallSensors(object):
-    """Convert Hall state-change events into speed and cadence estimates."""
+    """Convert speed/cadence Hall events into km/h and RPM."""
 
     def __init__(
         self,
         speed_port: int = 3,
         cadence_port: int = 4,
-        wheel_circumference_m: float = 2.10,
+        wheel_diameter_cm: float = 70.0,
+        speed_magnets_per_rotation: int = 1,
+        cadence_magnets_per_rotation: int = 1,
+        debounce_seconds: float = 0.10,
+        debug: bool = False,
     ) -> None:
-        self.speed_counter = HallSensorCounter("Speed", speed_port)
-        self.cadence_counter = HallSensorCounter("Cadence", cadence_port)
-        self.wheel_circumference_m = float(wheel_circumference_m)
+        self.wheel_diameter_cm = float(wheel_diameter_cm)
+        self.wheel_circumference_m = math.pi * (self.wheel_diameter_cm / 100.0)
+        self.debug = bool(debug)
+        self.speed_counter = HallSensorCounter(
+            port=speed_port,
+            label="Speed",
+            debounce_seconds=debounce_seconds,
+            magnets_per_rotation=speed_magnets_per_rotation,
+            debug=debug,
+        )
+        self.cadence_counter = HallSensorCounter(
+            port=cadence_port,
+            label="Cadence",
+            debounce_seconds=debounce_seconds,
+            magnets_per_rotation=cadence_magnets_per_rotation,
+            debug=debug,
+        )
         self._speed_kmh = 0.0
-        self._cadence_rpm = 0.0
+        self._cadence_rpm = 0
+        self._last_speed_measurement = self.speed_counter.get_measurement()
+        self._last_cadence_measurement = self.cadence_counter.get_measurement()
 
-    def read_speed_kmh(self) -> float:
-        """Return a smoothed speed estimate in km/h."""
-        period_seconds = self.speed_counter.get_latest_period_seconds()
-        seconds_since_event = self.speed_counter.get_seconds_since_last_event()
+    def read(self) -> Tuple[float, int]:
+        """Return speed_kmh and cadence_rpm."""
+        self._last_speed_measurement = self.speed_counter.get_measurement()
+        self._last_cadence_measurement = self.cadence_counter.get_measurement()
 
-        if period_seconds is not None and period_seconds > 0:
-            rotations_per_second = 1.0 / period_seconds
-            instant_speed_kmh = (
-                rotations_per_second * self.wheel_circumference_m * 3.6
-            )
-            self._speed_kmh = self._smooth(self._speed_kmh, instant_speed_kmh)
+        speed_rps = float(self._last_speed_measurement["rotations_per_second"])
+        cadence_rpm = float(self._last_cadence_measurement["rpm"])
+        self._speed_kmh = round(speed_rps * self.wheel_circumference_m * 3.6, 2)
+        self._cadence_rpm = int(round(cadence_rpm))
+        return self._speed_kmh, self._cadence_rpm
 
-        self._speed_kmh = self._decay_toward_zero(
-            self._speed_kmh,
-            seconds_since_event,
-            self.speed_counter.timeout_seconds,
-        )
-        return self._speed_kmh
-
-    def read_cadence_rpm(self) -> int:
-        """Return a smoothed cadence estimate in RPM."""
-        period_seconds = self.cadence_counter.get_latest_period_seconds()
-        seconds_since_event = self.cadence_counter.get_seconds_since_last_event()
-
-        if period_seconds is not None and period_seconds > 0:
-            instant_cadence_rpm = 60.0 / period_seconds
-            self._cadence_rpm = self._smooth(self._cadence_rpm, instant_cadence_rpm)
-
-        self._cadence_rpm = self._decay_toward_zero(
-            self._cadence_rpm,
-            seconds_since_event,
-            self.cadence_counter.timeout_seconds,
-        )
-        return int(round(self._cadence_rpm))
-
-    def get_event_counts(self) -> tuple:
-        """Return speed and cadence event totals."""
+    def get_debug_text(self) -> str:
+        """Return one-line raw/event debug text for terminal output."""
+        speed_raw = self._format_raw(self._last_speed_measurement.get("raw_value"))
+        cadence_raw = self._format_raw(self._last_cadence_measurement.get("raw_value"))
         return (
-            self.speed_counter.get_event_count(),
-            self.cadence_counter.get_event_count(),
+            "HALL DEBUG: SPEED D3 raw={speed_raw} events={speed_events} | "
+            "CADENCE D4 raw={cadence_raw} events={cadence_events}"
+        ).format(
+            speed_raw=speed_raw,
+            speed_events=self._last_speed_measurement.get("event_count", 0),
+            cadence_raw=cadence_raw,
+            cadence_events=self._last_cadence_measurement.get("event_count", 0),
         )
 
     def stop(self) -> None:
@@ -198,23 +227,7 @@ class SpeedCadenceHallSensors(object):
         self.speed_counter.stop()
         self.cadence_counter.stop()
 
-    def _smooth(self, current_value: float, new_value: float) -> float:
-        if current_value <= 0:
-            return new_value
-        return (current_value * 0.65) + (new_value * 0.35)
-
-    def _decay_toward_zero(
-        self,
-        value: float,
-        seconds_since_event: Optional[float],
-        timeout_seconds: float,
-    ) -> float:
-        if seconds_since_event is None:
-            return 0.0
-        if seconds_since_event <= timeout_seconds:
-            return value
-
-        decayed = value * 0.7
-        if decayed < 0.5:
-            return 0.0
-        return decayed
+    def _format_raw(self, raw_value: Any) -> str:
+        if raw_value is None:
+            return "INVALID"
+        return str(raw_value)

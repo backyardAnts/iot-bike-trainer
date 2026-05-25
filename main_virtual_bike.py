@@ -127,6 +127,10 @@ def run_real_mode(
     heart_rate_bpm: int = 0,
     lcd_enabled: bool = True,
     lcd_debug: bool = False,
+    wheel_diameter_cm: float = 70.0,
+    speed_magnets_per_rotation: int = 1,
+    cadence_magnets_per_rotation: int = 1,
+    hall_debug: bool = False,
 ) -> None:
     """Read physical GrovePi sensors and optionally publish them to MQTT."""
     from config_layer.mqtt_topics import SENSOR_TOPIC
@@ -139,6 +143,10 @@ def run_real_mode(
         heart_rate_bpm=heart_rate_bpm,
         lcd_enabled=lcd_enabled,
         lcd_debug=lcd_debug,
+        wheel_diameter_cm=wheel_diameter_cm,
+        speed_magnets_per_rotation=speed_magnets_per_rotation,
+        cadence_magnets_per_rotation=cadence_magnets_per_rotation,
+        hall_debug=hall_debug,
     )
     profile = get_training_profile(bike.workout_type)
     topic = sensor_topic or SENSOR_TOPIC
@@ -729,6 +737,29 @@ def parse_args() -> argparse.Namespace:
         help="MQTT sensor topic for real hardware mode",
     )
     parser.add_argument(
+        "--wheel-diameter-cm",
+        type=float,
+        default=70.0,
+        help="wheel diameter in centimeters for real speed Hall sensor",
+    )
+    parser.add_argument(
+        "--speed-magnets-per-rotation",
+        type=int,
+        default=1,
+        help="speed Hall magnet passes per wheel rotation",
+    )
+    parser.add_argument(
+        "--cadence-magnets-per-rotation",
+        type=int,
+        default=1,
+        help="cadence Hall magnet passes per crank rotation",
+    )
+    parser.add_argument(
+        "--hall-debug",
+        action="store_true",
+        help="print real Hall sensor raw values and event counts",
+    )
+    parser.add_argument(
         "--decisions",
         action="store_true",
         help="print local rule-based decisions for each sensor reading",
@@ -756,6 +787,10 @@ if __name__ == "__main__":
                 broker_port=args.mqtt_port,
                 sensor_topic=args.topic,
                 heart_rate_bpm=args.heart_rate,
+                wheel_diameter_cm=args.wheel_diameter_cm,
+                speed_magnets_per_rotation=args.speed_magnets_per_rotation,
+                cadence_magnets_per_rotation=args.cadence_magnets_per_rotation,
+                hall_debug=args.hall_debug,
             )
         else:
             selected_workout_type = choose_workout_type(args.workout)

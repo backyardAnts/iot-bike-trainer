@@ -81,6 +81,29 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="run only a direct LCD test and exit",
     )
+    parser.add_argument(
+        "--wheel-diameter-cm",
+        type=float,
+        default=70.0,
+        help="wheel diameter in centimeters for speed calculation",
+    )
+    parser.add_argument(
+        "--speed-magnets-per-rotation",
+        type=int,
+        default=1,
+        help="speed Hall magnet passes per wheel rotation",
+    )
+    parser.add_argument(
+        "--cadence-magnets-per-rotation",
+        type=int,
+        default=1,
+        help="cadence Hall magnet passes per crank rotation",
+    )
+    parser.add_argument(
+        "--hall-debug",
+        action="store_true",
+        help="print raw D3/D4 Hall values and counted events",
+    )
     return parser.parse_args()
 
 
@@ -101,4 +124,8 @@ if __name__ == "__main__":
         heart_rate_bpm=args.heart_rate,
         lcd_enabled=not args.no_lcd,
         lcd_debug=args.lcd_debug,
+        wheel_diameter_cm=args.wheel_diameter_cm,
+        speed_magnets_per_rotation=args.speed_magnets_per_rotation,
+        cadence_magnets_per_rotation=args.cadence_magnets_per_rotation,
+        hall_debug=args.hall_debug,
     )

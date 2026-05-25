@@ -14,6 +14,7 @@ from config_layer.training_profiles import (
     normalize_workout_type,
 )
 from sensor_layer.real_sensors.buzzer_controller import BuzzerController
+from sensor_layer.real_sensors.hall_sensor_counter import SpeedCadenceHallSensors
 from sensor_layer.real_sensors.lcd_controller import LcdController
 from sensor_layer.real_sensors.ultrasonic_sensors import UltrasonicSensors
 
@@ -34,6 +35,10 @@ class RealBike(object):
         session_counter_file: Optional[Path] = None,
         lcd_enabled: bool = True,
         lcd_debug: bool = False,
+        wheel_diameter_cm: float = 70.0,
+        speed_magnets_per_rotation: int = 1,
+        cadence_magnets_per_rotation: int = 1,
+        hall_debug: bool = False,
     ) -> None:
         self.device_id = str(device_id)
         self.workout_type = self._normalize_workout_type(workout_type)
@@ -43,8 +48,17 @@ class RealBike(object):
             else get_next_session_id(session_counter_file)
         )
         self.heart_rate_bpm = int(heart_rate_bpm)
+        self.hall_debug = bool(hall_debug)
 
         self.ultrasonic_sensors = UltrasonicSensors(left_port=5, right_port=6)
+        self.hall_sensors = SpeedCadenceHallSensors(
+            speed_port=3,
+            cadence_port=4,
+            wheel_diameter_cm=wheel_diameter_cm,
+            speed_magnets_per_rotation=speed_magnets_per_rotation,
+            cadence_magnets_per_rotation=cadence_magnets_per_rotation,
+            debug=hall_debug,
+        )
         self.buzzer = BuzzerController(port=7)
         self.lcd = (
             LcdController(enabled=lcd_enabled, debug=lcd_debug)
@@ -64,6 +78,7 @@ class RealBike(object):
         """Read all physical sensors and return one JSON-ready dictionary."""
         left_distance_m, right_distance_m = self.ultrasonic_sensors.read()
         ultrasonic_status = self.ultrasonic_sensors.get_last_status()
+        speed_kmh, cadence_rpm = self.hall_sensors.read()
 
         feedback = self._build_side_feedback(
             left_distance_m,
@@ -73,14 +88,19 @@ class RealBike(object):
         buzzer_state = bool(feedback["buzzer_state"])
         self.buzzer.set_state(buzzer_state)
         self._update_lcd(feedback)
-        self._latest_status = self._format_status_line(feedback, ultrasonic_status)
+        self._latest_status = self._format_status_line(
+            feedback,
+            ultrasonic_status,
+            speed_kmh,
+            cadence_rpm,
+        )
 
         self._latest_message = build_sensor_message(
             device_id=self.device_id,
             session_id=self.session_id,
             workout_type=self.workout_type,
-            speed_kmh=0.0,
-            cadence_rpm=0,
+            speed_kmh=speed_kmh,
+            cadence_rpm=cadence_rpm,
             heart_rate_bpm=self.heart_rate_bpm,
             temperature_c=25.0,
             left_distance_m=left_distance_m,
@@ -93,6 +113,7 @@ class RealBike(object):
             buzzer_state=buzzer_state,
             led_state=False,
         )
+        self._latest_message["speed_kmh"] = round(float(speed_kmh), 2)
         return self._latest_message
 
     def get_latest_status_line(self) -> str:
@@ -107,6 +128,7 @@ class RealBike(object):
 
     def cleanup(self) -> None:
         """Stop background hardware work and leave outputs off."""
+        self.hall_sensors.stop()
         self.buzzer.cleanup()
         if self.lcd is not None:
             self.lcd.cleanup()
@@ -186,8 +208,14 @@ class RealBike(object):
         self,
         feedback: Dict[str, Any],
         ultrasonic_status: Dict[str, Any],
+        speed_kmh: float,
+        cadence_rpm: int,
     ) -> str:
-        return "LEFT: {left} | RIGHT: {right} | STATUS: {status} | BUZZER: {buzzer}".format(
+        status_line = (
+            "LEFT: {left} | RIGHT: {right} | STATUS: {status} | "
+            "BUZZER: {buzzer} | SPEED: {speed:.1f} km/h | "
+            "CADENCE: {cadence:d} rpm"
+        ).format(
             left=self._format_distance_cm(
                 ultrasonic_status.get("left_raw_cm"),
                 bool(ultrasonic_status.get("left_valid")),
@@ -198,7 +226,15 @@ class RealBike(object):
             ),
             status=str(feedback["display_message"]),
             buzzer="ON" if feedback["buzzer_state"] else "OFF",
+            speed=float(speed_kmh),
+            cadence=int(cadence_rpm),
         )
+        if self.hall_debug:
+            status_line = "{} | {}".format(
+                status_line,
+                self.hall_sensors.get_debug_text(),
+            )
+        return status_line
 
     def _format_distance_cm(self, raw_cm: Any, valid: bool) -> str:
         if not valid:
