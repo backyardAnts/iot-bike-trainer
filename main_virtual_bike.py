@@ -169,6 +169,7 @@ def run_real_mode(
     client: Any | None = None
     publisher: MqttPublisher | None = None
     subscriber: MqttCommandSubscriber | None = None
+    command_handler: Any | None = None
 
     try:
         if mqtt_enabled:
@@ -180,9 +181,10 @@ def run_real_mode(
                     broker_port=broker_port,
                 )
                 publisher = MqttPublisher(client)
+                command_handler = CommandHandler(bike, defer_application=True)
                 subscriber = MqttCommandSubscriber(
                     client,
-                    CommandHandler(bike),
+                    command_handler,
                     merged_sensor_handler=_print_merged_sensor_output,
                 )
                 client.loop_start()
@@ -236,6 +238,7 @@ def run_real_mode(
             time.sleep(2.0)
 
         while True:
+            _apply_pending_real_command(command_handler)
             message = bike.update()
             status_line = bike.get_latest_status_line()
             if status_line:
@@ -249,6 +252,7 @@ def run_real_mode(
                 print("Warning: real sensor message failed schema validation.")
             if publisher is not None:
                 publisher.publish_json(topic, message)
+            _apply_pending_real_command(command_handler)
             bike.wait_between_updates(interval_seconds)
     except KeyboardInterrupt:
         print("\nReal GrovePi bike mode stopping.")
@@ -265,6 +269,18 @@ def run_real_mode(
                 print(f"MQTT cleanup failed: {exc}")
         bike.cleanup()
         print("Real GrovePi bike mode stopped.")
+
+
+def _apply_pending_real_command(command_handler: Any | None) -> None:
+    """Apply one queued real-bike MQTT command on the main hardware loop."""
+    if command_handler is None:
+        return
+    if not hasattr(command_handler, "apply_latest_command"):
+        return
+
+    result = command_handler.apply_latest_command()
+    if result is not None:
+        print(f"Command result: {result}", flush=True)
 
 
 def _print_merged_sensor_output(payload: bytes) -> None:

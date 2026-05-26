@@ -3,16 +3,34 @@
 from __future__ import annotations
 
 import json
+from threading import Lock
 from typing import Any
 
 from config_layer import settings
+
+SUPPORTED_COMMANDS = {
+    "BUZZER_ON",
+    "BUZZER_OFF",
+    "DISPLAY_MESSAGE",
+    "SPEAK_MESSAGE",
+    "SET_FEEDBACK",
+    "UPDATE_FEEDBACK",
+    "CLEAR_FEEDBACK",
+    "START_SESSION",
+    "STOP_SESSION",
+    "SET_DISTANCE_THRESHOLD",
+    "SET_HEART_RATE_LIMIT",
+}
 
 
 class CommandHandler:
     """Parse and apply supported commands received over MQTT."""
 
-    def __init__(self, bike: Any) -> None:
+    def __init__(self, bike: Any, defer_application: bool = False) -> None:
         self.bike = bike
+        self.defer_application = bool(defer_application)
+        self._pending_command = None  # type: dict[str, Any] | None
+        self._lock = Lock()
 
     def handle_command(self, payload: str | bytes | dict[str, Any]) -> dict[str, Any]:
         """Handle a command payload and return a command result dictionary."""
@@ -24,6 +42,29 @@ class CommandHandler:
                 "message": "Command payload must be valid JSON or a dictionary",
             }
 
+        command = str(command_data.get("command", "")).strip().upper()
+        if self.defer_application:
+            return self._queue_command(command, command_data)
+
+        return self.apply_command(command_data)
+
+    def pop_latest_command(self) -> dict[str, Any] | None:
+        """Return and clear the latest queued command, if command deferral is active."""
+        with self._lock:
+            command_data = self._pending_command
+            self._pending_command = None
+        return command_data
+
+    def apply_latest_command(self) -> dict[str, Any] | None:
+        """Apply one queued command on the caller's thread."""
+        command_data = self.pop_latest_command()
+        if command_data is None:
+            return None
+
+        return self.apply_command(command_data)
+
+    def apply_command(self, command_data: dict[str, Any]) -> dict[str, Any]:
+        """Apply a parsed command immediately on the caller's thread."""
         command = str(command_data.get("command", "")).strip().upper()
 
         if command == "BUZZER_ON":
@@ -105,6 +146,27 @@ class CommandHandler:
             )
 
         return self._result(False, command or "UNKNOWN", "Unsupported command")
+
+    def _queue_command(
+        self,
+        command: str,
+        command_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        if command not in SUPPORTED_COMMANDS:
+            return self._result(False, command or "UNKNOWN", "Unsupported command")
+
+        with self._lock:
+            self._pending_command = dict(command_data)
+
+        return self._result(
+            True,
+            command,
+            "Command queued for main loop",
+            status="queued",
+            decision_type=command_data.get("decision_type"),
+            recommended_action=command_data.get("recommended_action"),
+            workout_type=command_data.get("workout_type"),
+        )
 
     def _parse_payload(self, payload: str | bytes | dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(payload, dict):

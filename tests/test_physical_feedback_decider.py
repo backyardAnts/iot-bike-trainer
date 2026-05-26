@@ -72,6 +72,27 @@ class PhysicalFeedbackDeciderTest(unittest.TestCase):
         self.assertEqual(bike.last_command["lcd_line_1"], "WARNING RIGHT")
         self.assertTrue(bike.last_command["buzzer_state"])
 
+    def test_deferred_command_handler_does_not_apply_physical_command_in_callback(
+        self,
+    ) -> None:
+        decision = decide_physical_feedback(make_sensor_data(1.00, 0.49))
+        command = build_feedback_command(decision)
+        bike = _FakeRealBike()
+        handler = CommandHandler(bike, defer_application=True)
+
+        result = handler.handle_command(command)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "queued")
+        self.assertEqual(bike.last_command, {})
+
+        apply_result = handler.apply_latest_command()
+
+        self.assertIsNotNone(apply_result)
+        self.assertTrue(apply_result["ok"])
+        self.assertEqual(bike.last_command["lcd_line_1"], "WARNING RIGHT")
+        self.assertTrue(bike.last_command["buzzer_state"])
+
     def test_real_bike_falls_back_without_command_feedback(self) -> None:
         bike = _make_fake_real_bike(command_feedback_enabled=False)
 
