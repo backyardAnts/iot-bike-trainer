@@ -129,11 +129,19 @@ class BackendService:
         )
         return True
 
-    def handle_status_message(self, topic: str, payload: str | bytes) -> None:
-        """Save one raw status payload."""
+    def handle_status_message(
+        self,
+        topic: str,
+        payload: str | bytes,
+    ) -> dict[str, Any] | None:
+        """Save one raw status payload and return a session update when present."""
         payload_text = _payload_to_text(payload)
         save_status_message(topic, payload_text)
         print(f"Saved status message from {topic}: {payload_text}")
+        status_message = _parse_json_object(payload_text)
+        if status_message is None:
+            return None
+        return build_session_status_payload(status_message)
 
     def handle_command_message(self, payload: str | bytes) -> None:
         """Save one command payload and update session rows when applicable."""
@@ -203,6 +211,46 @@ def _parse_json_object(payload: str) -> dict[str, Any] | None:
         return None
 
     return parsed if isinstance(parsed, dict) else None
+
+
+def build_session_status_payload(
+    status_message: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return a retained session-topic payload for started/stopped bike status."""
+    status = str(status_message.get("status", "")).strip().lower()
+    if status not in {"started", "stopped"}:
+        return None
+
+    session_id = _non_empty_string(status_message.get("session_id"))
+    if session_id is None:
+        return None
+
+    device_id = _non_empty_string(status_message.get("device_id"))
+    if status == "started":
+        if device_id != DEVICE_ID:
+            return None
+    elif device_id is None:
+        device_id = DEVICE_ID
+    elif device_id != DEVICE_ID:
+        return None
+
+    timestamp = _non_empty_string(status_message.get("timestamp"))
+    workout_type = _non_empty_string(status_message.get("workout_type")) or ""
+    return {
+        "device_id": device_id,
+        "session_id": session_id,
+        "workout_type": workout_type,
+        "status": "active" if status == "started" else "stopped",
+        "timestamp": timestamp or get_current_timestamp(),
+    }
+
+
+def _non_empty_string(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    return text or None
 
 
 def parse_heart_rate_message(message: dict[str, Any]) -> dict[str, Any] | None:

@@ -9,6 +9,7 @@ from config_layer.mqtt_topics import (
     HEART_RATE_TOPIC,
     MERGED_SENSORS_TOPIC,
     SENSOR_TOPIC,
+    SESSION_TOPIC,
     STATUS_TOPIC,
 )
 from mqtt_layer.publisher import MqttPublisher
@@ -92,7 +93,12 @@ class MqttBackendReceiver:
             return
 
         if message.topic == STATUS_TOPIC:
-            self.backend_service.handle_status_message(message.topic, message.payload)
+            session_payload = self.backend_service.handle_status_message(
+                message.topic,
+                message.payload,
+            )
+            if session_payload is not None:
+                self._publish_session_message(session_payload)
             return
 
         if message.topic == COMMAND_TOPIC:
@@ -121,3 +127,12 @@ class MqttBackendReceiver:
 
         if self.publisher.publish_json(MERGED_SENSORS_TOPIC, merged_sensor_message):
             print(f"Published merged sensor message to {MERGED_SENSORS_TOPIC}")
+
+    def _publish_session_message(self, session_payload: dict[str, Any]) -> None:
+        if self.publisher is None:
+            print("Could not publish session message: MQTT publisher is not ready.")
+            return
+
+        if self.publisher.publish_json(SESSION_TOPIC, session_payload, retain=True):
+            session_status = str(session_payload.get("status", ""))
+            print(f"Published {session_status} session to {SESSION_TOPIC}")

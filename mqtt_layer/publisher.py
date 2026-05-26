@@ -15,19 +15,24 @@ class MqttPublisher:
     def __init__(self, client: Any) -> None:
         self.client = client
 
-    def publish_json(self, topic: str, payload: dict[str, Any]) -> bool:
+    def publish_json(
+        self,
+        topic: str,
+        payload: dict[str, Any],
+        retain: bool = False,
+    ) -> bool:
         """Publish a dictionary as JSON."""
         try:
             payload_text = json.dumps(payload, separators=(",", ":"))
-            return self._publish(topic, payload_text)
+            return self._publish(topic, payload_text, retain=retain)
         except Exception as exc:
             print(f"Failed to publish JSON to {topic}: {exc}")
             return False
 
-    def publish_text(self, topic: str, payload: str) -> bool:
+    def publish_text(self, topic: str, payload: str, retain: bool = False) -> bool:
         """Publish plain text."""
         try:
-            return self._publish(topic, payload)
+            return self._publish(topic, payload, retain=retain)
         except Exception as exc:
             print(f"Failed to publish text to {topic}: {exc}")
             return False
@@ -43,8 +48,11 @@ class MqttPublisher:
 
         return self.publish_json(STATUS_TOPIC, payload)
 
-    def _publish(self, topic: str, payload: str) -> bool:
-        result = self.client.publish(topic, payload)
+    def _publish(self, topic: str, payload: str, retain: bool = False) -> bool:
+        if retain:
+            result = self.client.publish(topic, payload, retain=True)
+        else:
+            result = self.client.publish(topic, payload)
         rc = getattr(result, "rc", 0)
         if rc != 0:
             print(f"MQTT publish to {topic} returned code {rc}.")

@@ -111,7 +111,14 @@ def run_mqtt_mode(
         print("\nVirtual bike MQTT simulator stopping.")
     finally:
         if publisher is not None:
-            publisher.publish_status("stopped")
+            publisher.publish_status(
+                "stopped",
+                {
+                    "device_id": bike.device_id,
+                    "session_id": bike.session_id,
+                    "workout_type": bike.workout_type,
+                },
+            )
         if subscriber is not None:
             subscriber.stop()
         if client is not None:
@@ -258,7 +265,15 @@ def run_real_mode(
         print("\nReal GrovePi bike mode stopping.")
     finally:
         if publisher is not None:
-            publisher.publish_status("stopped", {"mode": "real"})
+            publisher.publish_status(
+                "stopped",
+                {
+                    "device_id": bike.device_id,
+                    "session_id": bike.session_id,
+                    "workout_type": bike.workout_type,
+                    "mode": "real",
+                },
+            )
         if subscriber is not None:
             subscriber.stop()
         if client is not None:
