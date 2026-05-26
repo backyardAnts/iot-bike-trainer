@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from config_layer.mqtt_topics import COMMAND_TOPIC, SENSOR_TOPIC, STATUS_TOPIC
+from config_layer.mqtt_topics import (
+    COMMAND_TOPIC,
+    HEART_RATE_TOPIC,
+    SENSOR_TOPIC,
+    STATUS_TOPIC,
+)
 from mqtt_layer.publisher import MqttPublisher
 
 
@@ -32,7 +37,7 @@ class MqttBackendReceiver:
         if self.client is None:
             return
 
-        for topic in (SENSOR_TOPIC, STATUS_TOPIC, COMMAND_TOPIC):
+        for topic in (SENSOR_TOPIC, STATUS_TOPIC, COMMAND_TOPIC, HEART_RATE_TOPIC):
             self.client.unsubscribe(topic)
 
         self.client.loop_stop()
@@ -65,7 +70,7 @@ class MqttBackendReceiver:
             return
 
         print("Backend connected to MQTT broker.")
-        for topic in (SENSOR_TOPIC, STATUS_TOPIC, COMMAND_TOPIC):
+        for topic in (SENSOR_TOPIC, STATUS_TOPIC, COMMAND_TOPIC, HEART_RATE_TOPIC):
             self._subscribe(topic)
 
     def _on_message(self, client: Any, userdata: object, message: Any) -> None:
@@ -76,6 +81,10 @@ class MqttBackendReceiver:
             )
             if feedback_command is not None:
                 self._publish_feedback_command(feedback_command)
+            return
+
+        if message.topic == HEART_RATE_TOPIC:
+            self.backend_service.handle_heart_rate_message(message.payload)
             return
 
         if message.topic == STATUS_TOPIC:

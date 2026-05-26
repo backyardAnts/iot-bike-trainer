@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from ai_decision_layer.decision_engine import DecisionEngine
@@ -23,12 +24,24 @@ from database_layer.sqlite_storage import (
     stop_session,
 )
 
+MIN_WATCH_HEART_RATE_BPM = 30
+MAX_WATCH_HEART_RATE_BPM = 240
+DEFAULT_HEART_RATE_TIMEOUT_SECONDS = 10.0
+
 
 class BackendService:
     """Parse MQTT payloads and store accepted records in SQLite."""
 
-    def __init__(self, decision_engine: DecisionEngine | None = None) -> None:
+    def __init__(
+        self,
+        decision_engine: DecisionEngine | None = None,
+        heart_rate_timeout_seconds: float = DEFAULT_HEART_RATE_TIMEOUT_SECONDS,
+        monotonic_clock: Any | None = None,
+    ) -> None:
         self.decision_engine = decision_engine or DecisionEngine()
+        self.heart_rate_timeout_seconds = float(heart_rate_timeout_seconds)
+        self._clock = monotonic_clock or time.monotonic
+        self._latest_heart_rates = {}  # type: dict[tuple[str, str], dict[str, Any]]
 
     def handle_sensor_message(
         self,
@@ -46,6 +59,8 @@ class BackendService:
         if not validate_sensor_message(message):
             print("Ignored invalid sensor payload: schema validation failed.")
             return None
+
+        message = self._merge_latest_heart_rate(message)
 
         save_sensor_reading(message)
         print(
@@ -78,6 +93,32 @@ class BackendService:
             print(f"Failed to save decision log: {exc}")
 
         return build_feedback_command(decision)
+
+    def handle_heart_rate_message(self, payload: str | bytes) -> bool:
+        """Validate and cache one Samsung Watch heart-rate MQTT payload."""
+        payload_text = _payload_to_text(payload)
+        message = _parse_json_object(payload_text)
+
+        if message is None:
+            print("Ignored invalid heart-rate payload: not a JSON object.")
+            return False
+
+        reading = parse_heart_rate_message(message)
+        if reading is None:
+            print("Ignored invalid heart-rate payload: schema validation failed.")
+            return False
+
+        key = (reading["device_id"], reading["session_id"])
+        self._latest_heart_rates[key] = {
+            **reading,
+            "received_at_monotonic": self._clock(),
+        }
+        print(
+            "Cached heart rate "
+            f"{reading['heart_rate_bpm']} bpm for "
+            f"{reading['device_id']} {reading['session_id']}."
+        )
+        return True
 
     def handle_status_message(self, topic: str, payload: str | bytes) -> None:
         """Save one raw status payload."""
@@ -122,6 +163,25 @@ class BackendService:
             return decide_physical_feedback(message)
         return self.decision_engine.analyze(message)
 
+    def _merge_latest_heart_rate(self, message: dict[str, Any]) -> dict[str, Any]:
+        key = (str(message["device_id"]), str(message["session_id"]))
+        latest = self._latest_heart_rates.get(key)
+        if latest is None:
+            return message
+
+        age_seconds = self._clock() - float(latest["received_at_monotonic"])
+        if age_seconds > self.heart_rate_timeout_seconds:
+            self._latest_heart_rates.pop(key, None)
+            print(
+                "Ignored expired heart-rate value for "
+                f"{key[0]} {key[1]}: age={age_seconds:.1f}s."
+            )
+            return message
+
+        merged_message = dict(message)
+        merged_message["heart_rate_bpm"] = int(latest["heart_rate_bpm"])
+        return merged_message
+
 
 def _payload_to_text(payload: str | bytes) -> str:
     if isinstance(payload, bytes):
@@ -136,6 +196,54 @@ def _parse_json_object(payload: str) -> dict[str, Any] | None:
         return None
 
     return parsed if isinstance(parsed, dict) else None
+
+
+def parse_heart_rate_message(message: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a validated heart-rate reading, or None when invalid."""
+    if not isinstance(message, dict):
+        return None
+
+    device_id = message.get("device_id")
+    session_id = message.get("session_id")
+    timestamp = message.get("timestamp")
+    if not isinstance(device_id, str) or not device_id.strip():
+        return None
+    if not isinstance(session_id, str) or not session_id.strip():
+        return None
+    if not isinstance(timestamp, str) or not timestamp.strip():
+        return None
+
+    heart_rate_bpm = _parse_heart_rate_bpm(message.get("heart_rate_bpm"))
+    if heart_rate_bpm is None:
+        return None
+
+    source = message.get("source", "")
+    if source is not None and not isinstance(source, str):
+        return None
+
+    return {
+        "device_id": device_id,
+        "session_id": session_id,
+        "timestamp": timestamp,
+        "heart_rate_bpm": heart_rate_bpm,
+        "source": source or "",
+    }
+
+
+def _parse_heart_rate_bpm(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+
+    try:
+        heart_rate_bpm = int(value)
+    except (TypeError, ValueError):
+        return None
+
+    if heart_rate_bpm < MIN_WATCH_HEART_RATE_BPM:
+        return None
+    if heart_rate_bpm > MAX_WATCH_HEART_RATE_BPM:
+        return None
+    return heart_rate_bpm
 
 
 def build_feedback_command(decision: DecisionResult | dict[str, Any]) -> dict[str, Any]:

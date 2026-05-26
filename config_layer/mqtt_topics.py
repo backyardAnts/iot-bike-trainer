@@ -5,10 +5,12 @@ SENSOR_TOPIC = "anthony/bike_001/sensors"
 COMMAND_TOPIC = "anthony/bike_001/commands"
 STATUS_TOPIC = "anthony/bike_001/status"
 ALERT_TOPIC = "anthony/bike_001/alerts"
+HEART_RATE_TOPIC = "anthony/bike_001/heart_rate"
 
 ALL_TOPICS = {
     "sensors": SENSOR_TOPIC,
     "commands": COMMAND_TOPIC,
     "status": STATUS_TOPIC,
     "alerts": ALERT_TOPIC,
+    "heart_rate": HEART_RATE_TOPIC,
 }
