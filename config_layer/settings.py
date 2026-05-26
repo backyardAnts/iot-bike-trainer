@@ -54,6 +54,9 @@ MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
 MQTT_USE_TLS = _env_bool("MQTT_USE_TLS", False)
 MQTT_KEEPALIVE_SECONDS = _env_int("MQTT_KEEPALIVE_SECONDS", 60)
 MQTT_CLIENT_ID_PREFIX = "anthony_bike_001"
+
+DEMO_AGE = _env_int("DEMO_AGE", 20)
+USER_AGE = _env_int("USER_AGE", DEMO_AGE)
 ## everything below this part is just about adding max and minimum values for the VIRTUAL sensors since we started the project with virtual sensors. After adding the real sensors we will not be needing them anymore.
 MIN_SPEED_KMH = 0
 MAX_SPEED_KMH = 35

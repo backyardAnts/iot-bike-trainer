@@ -10,10 +10,39 @@ from config_layer.thresholds import (
     HR_WARNING_PERCENT_OF_MAX,
 )
 
+MIN_AVAILABLE_HEART_RATE_BPM = 40
+MAX_AVAILABLE_HEART_RATE_BPM = 220
+
 
 def estimate_max_hr(age: int | float) -> float:
-    """Estimate max heart rate using the Tanaka-style formula."""
-    return 208 - (0.7 * float(age))
+    """Estimate max heart rate using the demo 220-age formula."""
+    return max(1.0, 220.0 - float(age))
+
+
+def is_heart_rate_available(value: Any) -> bool:
+    """Return True when the heart-rate value can be used for guidance."""
+    if value is None or isinstance(value, bool):
+        return False
+
+    try:
+        heart_rate_bpm = int(value)
+    except (TypeError, ValueError):
+        return False
+
+    return (
+        MIN_AVAILABLE_HEART_RATE_BPM
+        <= heart_rate_bpm
+        <= MAX_AVAILABLE_HEART_RATE_BPM
+    )
+
+
+def calculate_hr_percent(
+    heart_rate_bpm: int | float,
+    rider_profile: dict[str, Any],
+) -> float:
+    """Return heart rate as a fraction of estimated maximum heart rate."""
+    max_hr = estimate_max_hr(rider_profile.get("age", 20))
+    return float(heart_rate_bpm) / max_hr
 
 
 def calculate_hr_thresholds(rider_profile: dict[str, Any]) -> dict[str, float]:
@@ -32,6 +61,9 @@ def check_heart_rate(
     workout_type: str,
 ) -> DecisionResult | None:
     """Return a heart-rate decision when the rider is above safety thresholds."""
+    if not is_heart_rate_available(sensor_message.get("heart_rate_bpm")):
+        return None
+
     heart_rate_bpm = float(sensor_message["heart_rate_bpm"])
     thresholds = calculate_hr_thresholds(rider_profile)
 

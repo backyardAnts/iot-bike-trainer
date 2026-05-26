@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 
+from ai_decision_layer.decision_engine import DecisionEngine
 from ai_decision_layer.physical_feedback_decider import decide_physical_feedback
 from backend_layer.backend_service import build_feedback_command
 from mqtt_layer.command_handler import CommandHandler
@@ -15,6 +16,31 @@ def make_sensor_data(left_distance_m: float, right_distance_m: float) -> dict[st
         "workout_type": "speed",
         "left_distance_m": left_distance_m,
         "right_distance_m": right_distance_m,
+    }
+
+
+def make_workout_sensor_data(
+    workout_type: str,
+    cadence_rpm: int,
+    speed_kmh: float,
+    heart_rate_bpm: int,
+) -> dict[str, object]:
+    return {
+        "device_id": "bike_001",
+        "timestamp": "test",
+        "session_id": "session_001",
+        "workout_type": workout_type,
+        "speed_kmh": speed_kmh,
+        "cadence_rpm": cadence_rpm,
+        "heart_rate_bpm": heart_rate_bpm,
+        "temperature_c": 25.0,
+        "left_distance_m": 2.0,
+        "right_distance_m": 2.0,
+        "display_active": False,
+        "display_message": "",
+        "speaker_message": "",
+        "alert_level": "normal",
+        "alert_side": "none",
     }
 
 
@@ -143,6 +169,24 @@ class PhysicalFeedbackDeciderTest(unittest.TestCase):
         bike.apply_physical_feedback_command(command)
 
         self.assertEqual(bike.lcd.display_count, 1)
+
+    def test_real_bike_workout_guidance_updates_lcd_without_buzzer(self) -> None:
+        bike = _make_fake_real_bike(command_feedback_enabled=True)
+        decision = DecisionEngine(rider_profile={"age": 20}).analyze(
+            make_workout_sensor_data(
+                workout_type="cadence",
+                cadence_rpm=45,
+                speed_kmh=12.0,
+                heart_rate_bpm=120,
+            )
+        )
+        command = build_feedback_command(decision)
+
+        bike.apply_physical_feedback_command(command)
+
+        self.assertEqual(decision.decision_type, "workout_guidance")
+        self.assertFalse(bike.buzzer.enabled)
+        self.assertEqual(bike.lcd.last_message, ("CADENCE", "Pedal faster"))
 
 
 class _FakeRealBike:

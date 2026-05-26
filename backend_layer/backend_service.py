@@ -8,10 +8,6 @@ from typing import Any
 
 from ai_decision_layer.decision_engine import DecisionEngine
 from ai_decision_layer.decision_result import DecisionResult
-from ai_decision_layer.physical_feedback_decider import (
-    decide_physical_feedback,
-    is_physical_sensor_message,
-)
 from common.message_schema import validate_sensor_message
 from common.time_utils import get_current_timestamp
 from config_layer.settings import DEFAULT_SESSION_ID, DEVICE_ID
@@ -171,9 +167,7 @@ class BackendService:
         stop_session(session_id, end_time)
         print(f"Stopped session record: {session_id}")
 
-    def _decide_feedback(self, message: dict[str, Any]) -> DecisionResult | dict[str, Any]:
-        if is_physical_sensor_message(message):
-            return decide_physical_feedback(message)
+    def _decide_feedback(self, message: dict[str, Any]) -> DecisionResult:
         return self.decision_engine.analyze(message)
 
     def _merge_latest_heart_rate(self, message: dict[str, Any]) -> dict[str, Any]:
@@ -280,7 +274,11 @@ def build_feedback_command(decision: DecisionResult | dict[str, Any]) -> dict[st
         "led_state",
         "lcd_line_1",
         "lcd_line_2",
+        "heart_rate_bpm",
+        "hr_percent",
     ):
+        if key == "hr_percent" and decision_data.get(key) is None:
+            continue
         if key in decision_data:
             command[key] = decision_data[key]
     return command

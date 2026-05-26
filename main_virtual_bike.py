@@ -423,7 +423,7 @@ def run_decision_self_test() -> None:
             heart_rate_bpm=120,
         )
     )
-    if low_cadence_decision.recommended_action != "increase_cadence":
+    if low_cadence_decision.recommended_action != "pedal_faster":
         raise RuntimeError(f"Unexpected low cadence decision: {low_cadence_decision}")
 
     good_cadence_decision = decision_engine.analyze(
@@ -434,7 +434,7 @@ def run_decision_self_test() -> None:
             heart_rate_bpm=120,
         )
     )
-    if good_cadence_decision.recommended_action != "maintain":
+    if good_cadence_decision.recommended_action != "keep_cadence":
         raise RuntimeError(f"Unexpected good cadence decision: {good_cadence_decision}")
 
     right_danger_decision = decision_engine.analyze(
@@ -443,30 +443,29 @@ def run_decision_self_test() -> None:
             cadence_rpm=90,
             speed_kmh=10,
             heart_rate_bpm=120,
-            right_distance_m=0.5,
+            right_distance_m=0.49,
         )
     )
     if (
-        right_danger_decision.decision_type != "safety"
-        or right_danger_decision.alert_level != "danger"
+        right_danger_decision.decision_type != "physical_safety"
+        or right_danger_decision.alert_level != "warning"
         or right_danger_decision.recommended_action != "object_right"
     ):
         raise RuntimeError(f"Unexpected safety decision: {right_danger_decision}")
 
     high_hr_decision = decision_engine.analyze(
         make_test_sensor_message(
-            workout_type="endurance",
-            cadence_rpm=80,
-            speed_kmh=20,
+            workout_type="vo2_max",
+            cadence_rpm=95,
+            speed_kmh=24,
             heart_rate_bpm=185,
         )
     )
     if (
-        high_hr_decision.decision_type != "heart_rate"
-        or high_hr_decision.alert_level != "danger"
-        or high_hr_decision.recommended_action != "recover"
+        high_hr_decision.decision_type != "workout_guidance"
+        or high_hr_decision.recommended_action != "recover_now"
     ):
-        raise RuntimeError(f"Unexpected heart-rate decision: {high_hr_decision}")
+        raise RuntimeError(f"Unexpected VO2 max decision: {high_hr_decision}")
 
     try:
         decision_engine.analyze(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -17,7 +18,13 @@ class DecisionResult:
     decision_type: str
     recommended_action: str
     workout_type: str
+    lcd_line_1: str = ""
+    lcd_line_2: str = ""
+    buzzer_state: bool = False
+    led_state: bool = False
+    heart_rate_bpm: int = 0
+    hr_percent: float | None = None
 
-    def to_dict(self) -> dict[str, str | bool]:
+    def to_dict(self) -> dict[str, Any]:
         """Return the decision as a plain dictionary."""
         return asdict(self)
