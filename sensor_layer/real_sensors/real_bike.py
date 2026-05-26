@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from ai_decision_layer.physical_feedback_decider import (
+    PHYSICAL_WARNING_THRESHOLD_CM,
+    decide_physical_feedback,
+)
 from common.message_schema import build_sensor_message
 from common.session_manager import get_next_session_id
 from config_layer import settings
@@ -19,8 +24,7 @@ from sensor_layer.real_sensors.temperature_sensor import TemperatureSensor
 from sensor_layer.real_sensors.ultrasonic_sensors import UltrasonicSensors
 
 
-SAFE_ALERT_DISTANCE_CM = 999.0
-WARNING_THRESHOLD_CM = 50.0
+WARNING_THRESHOLD_CM = PHYSICAL_WARNING_THRESHOLD_CM
 
 
 class RealBike(object):
@@ -43,6 +47,8 @@ class RealBike(object):
         enable_temperature: bool = True,
         temperature_sensor_type: int = 0,
         temperature_debug: bool = False,
+        command_feedback_enabled: bool = False,
+        command_timeout_seconds: float = 3.0,
     ) -> None:
         self.device_id = str(device_id)
         self.workout_type = self._normalize_workout_type(workout_type)
@@ -56,6 +62,8 @@ class RealBike(object):
         self.hall_debug = bool(hall_debug)
         self.enable_temperature = bool(enable_temperature)
         self.temperature_debug = bool(temperature_debug)
+        self.command_feedback_enabled = bool(command_feedback_enabled)
+        self.command_timeout_seconds = float(command_timeout_seconds)
         self._last_hall_error = ""  # type: str
 
         self.ultrasonic_sensors = UltrasonicSensors(left_port=5, right_port=6)
@@ -86,6 +94,8 @@ class RealBike(object):
         self._latest_status = ""  # type: str
         self._latest_humidity_percent = None  # type: Optional[float]
         self._last_temperature_error = ""  # type: str
+        self._latest_feedback = self._build_safe_feedback()
+        self._last_command_time = None  # type: Optional[float]
 
     def show_startup_lcd_message(self) -> None:
         """Display a short startup LCD confirmation if LCD is enabled."""
@@ -100,14 +110,14 @@ class RealBike(object):
         speed_kmh, cadence_rpm = self._read_hall_values()
         temperature_c, humidity_percent = self._read_temperature_values()
 
-        feedback = self._build_side_feedback(
-            left_distance_m,
-            right_distance_m,
-            ultrasonic_status,
-        )
+        feedback_input = self._build_feedback_input(left_distance_m, right_distance_m)
+        if self._should_use_local_feedback_fallback():
+            feedback = decide_physical_feedback(feedback_input)
+            self._apply_hardware_feedback(feedback)
+        else:
+            feedback = self._latest_feedback
+
         buzzer_state = bool(feedback["buzzer_state"])
-        self.buzzer.set_state(buzzer_state)
-        self._update_lcd(feedback)
         self._latest_status = self._format_status_line(
             feedback,
             ultrasonic_status,
@@ -137,6 +147,55 @@ class RealBike(object):
         self._latest_message["speed_kmh"] = round(float(speed_kmh), 2)
         self._latest_humidity_percent = humidity_percent
         return self._latest_message
+
+    def set_command_feedback_enabled(self, enabled: bool) -> None:
+        """Enable or disable backend command feedback mode."""
+        self.command_feedback_enabled = bool(enabled)
+
+    def apply_physical_feedback_command(self, command_data: Dict[str, Any]) -> None:
+        """Apply an AI/backend feedback command to buzzer and LCD hardware."""
+        feedback = self._normalize_feedback_command(command_data)
+        self._latest_feedback = feedback
+        self._last_command_time = time.monotonic()
+        self._apply_hardware_feedback(feedback)
+
+    def set_feedback(
+        self,
+        display_message: str = settings.DEFAULT_DISPLAY_MESSAGE,
+        speaker_message: str = settings.DEFAULT_SPEAKER_MESSAGE,
+        alert_level: str = settings.DEFAULT_ALERT_LEVEL,
+        alert_side: str = settings.DEFAULT_ALERT_SIDE,
+        display_active: Any = None,
+    ) -> None:
+        """Apply generic feedback commands through the real hardware outputs."""
+        self.apply_physical_feedback_command(
+            {
+                "display_active": display_active,
+                "display_message": display_message,
+                "speaker_message": speaker_message,
+                "alert_level": alert_level,
+                "alert_side": alert_side,
+            }
+        )
+
+    def clear_feedback(self) -> None:
+        """Reset physical feedback to the safe hardware state."""
+        self.apply_physical_feedback_command(self._build_safe_feedback())
+
+    def set_display_message(self, message: str) -> None:
+        """Write a display-only message through the LCD."""
+        feedback = dict(self._latest_feedback)
+        feedback["display_message"] = str(message)
+        feedback["display_active"] = bool(message)
+        feedback["lcd_line_1"] = str(message)
+        feedback["lcd_line_2"] = ""
+        self.apply_physical_feedback_command(feedback)
+
+    def set_speaker_message(self, message: str) -> None:
+        """Store the speaker message in the current feedback state."""
+        feedback = dict(self._latest_feedback)
+        feedback["speaker_message"] = str(message)
+        self.apply_physical_feedback_command(feedback)
 
     def get_latest_status_line(self) -> str:
         """Return the latest terminal-friendly real hardware status line."""
@@ -237,8 +296,6 @@ class RealBike(object):
     def wait_between_updates(self, duration_seconds: float) -> None:
         """Wait between full sensor reads while polling Hall inputs if enabled."""
         if self.hall_sensors is None:
-            import time
-
             time.sleep(duration_seconds)
             return
 
@@ -246,70 +303,89 @@ class RealBike(object):
             self.hall_sensors.poll_for(duration_seconds)
         except Exception as exc:
             self._warn_hall_once("Hall polling failed: {}".format(exc))
-            import time
 
             time.sleep(duration_seconds)
 
-    def _build_side_feedback(
+    def _should_use_local_feedback_fallback(self) -> bool:
+        if not self.command_feedback_enabled:
+            return True
+        if self._last_command_time is None:
+            return True
+        return time.monotonic() - self._last_command_time > self.command_timeout_seconds
+
+    def _build_feedback_input(
         self,
         left_distance_m: float,
         right_distance_m: float,
-        ultrasonic_status: Dict[str, Any],
     ) -> Dict[str, Any]:
-        left_cm = self._alert_distance_cm(
-            left_distance_m,
-            bool(ultrasonic_status.get("left_valid")),
-        )
-        right_cm = self._alert_distance_cm(
-            right_distance_m,
-            bool(ultrasonic_status.get("right_valid")),
-        )
-        left_close = left_cm < WARNING_THRESHOLD_CM
-        right_close = right_cm < WARNING_THRESHOLD_CM
+        return {
+            "workout_type": self.workout_type,
+            "left_distance_m": left_distance_m,
+            "right_distance_m": right_distance_m,
+        }
 
-        if left_close and right_close:
-            return {
-                "alert_level": "danger",
-                "alert_side": "both",
-                "display_active": True,
-                "display_message": "WARNING BOTH",
-                "speaker_message": "Objects on both sides",
-                "buzzer_state": True,
-                "lcd_line_1": "WARNING BOTH",
-                "lcd_line_2": "Object close",
+    def _build_safe_feedback(self) -> Dict[str, Any]:
+        return decide_physical_feedback(
+            {
+                "workout_type": self.workout_type,
+                "left_distance_m": 9.99,
+                "right_distance_m": 9.99,
             }
-        if left_close:
-            return {
-                "alert_level": "warning",
-                "alert_side": "left",
-                "display_active": True,
-                "display_message": "WARNING LEFT",
-                "speaker_message": "Object on left",
-                "buzzer_state": True,
-                "lcd_line_1": "WARNING LEFT",
-                "lcd_line_2": "Object close",
-            }
-        if right_close:
-            return {
-                "alert_level": "warning",
-                "alert_side": "right",
-                "display_active": True,
-                "display_message": "WARNING RIGHT",
-                "speaker_message": "Object on right",
-                "buzzer_state": True,
-                "lcd_line_1": "WARNING RIGHT",
-                "lcd_line_2": "Object close",
-            }
+        )
+
+    def _apply_hardware_feedback(self, feedback: Dict[str, Any]) -> None:
+        self._latest_feedback = self._normalize_feedback_command(feedback)
+        self.buzzer.set_state(bool(self._latest_feedback["buzzer_state"]))
+        self._update_lcd(self._latest_feedback)
+
+    def _normalize_feedback_command(self, command_data: Dict[str, Any]) -> Dict[str, Any]:
+        safe_feedback = self._build_safe_feedback()
+        alert_level = str(command_data.get("alert_level", safe_feedback["alert_level"]))
+        alert_side = str(
+            command_data.get(
+                "alert_side",
+                command_data.get("warning_side", safe_feedback["alert_side"]),
+            )
+        )
+        display_message = str(
+            command_data.get("display_message", safe_feedback["display_message"])
+        )
+        speaker_message = str(
+            command_data.get("speaker_message", safe_feedback["speaker_message"])
+        )
+        display_active = _coerce_bool(
+            command_data.get("display_active", safe_feedback["display_active"])
+        )
+        default_buzzer_state = alert_level in {"warning", "danger"}
+        buzzer_state = _coerce_bool(
+            command_data.get("buzzer_state", default_buzzer_state)
+        )
+        lcd_line_1 = str(command_data.get("lcd_line_1", display_message))
+        lcd_line_2 = str(command_data.get("lcd_line_2", ""))
 
         return {
-            "alert_level": "normal",
-            "alert_side": "none",
-            "display_active": False,
-            "display_message": "SAFE",
-            "speaker_message": "",
-            "buzzer_state": False,
-            "lcd_line_1": "SAFE",
-            "lcd_line_2": "No object close",
+            "command": str(command_data.get("command", "update_feedback")),
+            "alert_state": str(command_data.get("alert_state", alert_level)),
+            "alert_level": alert_level,
+            "alert_side": alert_side,
+            "warning_side": str(command_data.get("warning_side", alert_side)),
+            "display_active": display_active,
+            "display_message": display_message,
+            "speaker_message": speaker_message,
+            "buzzer_state": buzzer_state,
+            "led_state": _coerce_bool(command_data.get("led_state", False)),
+            "lcd_line_1": lcd_line_1,
+            "lcd_line_2": lcd_line_2,
+            "decision_type": str(
+                command_data.get("decision_type", safe_feedback["decision_type"])
+            ),
+            "recommended_action": str(
+                command_data.get(
+                    "recommended_action",
+                    safe_feedback["recommended_action"],
+                )
+            ),
+            "workout_type": str(command_data.get("workout_type", self.workout_type)),
         }
 
     def _update_lcd(self, feedback: Dict[str, Any]) -> None:
@@ -317,8 +393,8 @@ class RealBike(object):
             return
 
         self.lcd.display(
-            str(feedback["lcd_line_1"]),
-            str(feedback["lcd_line_2"]),
+            str(feedback.get("lcd_line_1", "")),
+            str(feedback.get("lcd_line_2", "")),
         )
 
     def _format_status_line(
@@ -366,11 +442,12 @@ class RealBike(object):
             return "INVALID"
         return "{:d} cm".format(int(round(float(raw_cm))))
 
-    def _alert_distance_cm(self, distance_m: float, valid: bool) -> float:
-        if not valid:
-            return SAFE_ALERT_DISTANCE_CM
-        return float(distance_m) * 100.0
-
     def _normalize_workout_type(self, workout_type: str) -> str:
         get_training_profile(workout_type)
         return normalize_workout_type(workout_type)
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}

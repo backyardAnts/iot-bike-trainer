@@ -1,4 +1,4 @@
-"""Handle MQTT command messages for the virtual bike."""
+"""Handle MQTT command messages for virtual and real bike feedback."""
 
 from __future__ import annotations
 
@@ -61,7 +61,10 @@ class CommandHandler:
             return self._result(True, command, "Speaker message updated")
 
         if command in {"SET_FEEDBACK", "UPDATE_FEEDBACK"}:
-            self._apply_feedback(command_data)
+            if self._is_physical_feedback_command(command_data):
+                self._apply_physical_feedback(command_data)
+            else:
+                self._apply_feedback(command_data)
             return self._result(
                 True,
                 command,
@@ -144,6 +147,24 @@ class CommandHandler:
             alert_level=str(alert_level),
             alert_side=str(alert_side),
         )
+
+    def _apply_physical_feedback(self, command_data: dict[str, Any]) -> None:
+        if hasattr(self.bike, "apply_physical_feedback_command"):
+            self.bike.apply_physical_feedback_command(command_data)
+            return
+
+        self._apply_feedback(command_data)
+
+    def _is_physical_feedback_command(self, command_data: dict[str, Any]) -> bool:
+        physical_keys = {
+            "alert_state",
+            "warning_side",
+            "buzzer_state",
+            "led_state",
+            "lcd_line_1",
+            "lcd_line_2",
+        }
+        return any(key in command_data for key in physical_keys)
 
     def _start_session(self) -> None:
         if hasattr(self.bike, "start_session"):

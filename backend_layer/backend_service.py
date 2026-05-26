@@ -7,6 +7,10 @@ from typing import Any
 
 from ai_decision_layer.decision_engine import DecisionEngine
 from ai_decision_layer.decision_result import DecisionResult
+from ai_decision_layer.physical_feedback_decider import (
+    decide_physical_feedback,
+    is_physical_sensor_message,
+)
 from common.message_schema import validate_sensor_message
 from common.time_utils import get_current_timestamp
 from config_layer.settings import DEFAULT_SESSION_ID, DEVICE_ID
@@ -50,23 +54,25 @@ class BackendService:
         )
 
         try:
-            decision = self.decision_engine.analyze(message)
+            decision = self._decide_feedback(message)
         except ValueError as exc:
             print(f"Skipped decision for invalid workout type: {exc}")
             return None
 
+        decision_data = _decision_to_dict(decision)
+
         print(
-            f"Decision for {message['device_id']}: {decision.display_message} "
-            f"| alert={decision.alert_level} "
-            f"| action={decision.recommended_action}"
+            f"Decision for {message['device_id']}: {decision_data['display_message']} "
+            f"| alert={decision_data['alert_level']} "
+            f"| action={decision_data['recommended_action']}"
         )
         try:
             save_decision_log(message, decision, source_topic=source_topic)
             print(
                 f"Saved decision log: device={message['device_id']} "
                 f"session={message['session_id']} "
-                f"alert={decision.alert_level} "
-                f"action={decision.recommended_action}"
+                f"alert={decision_data['alert_level']} "
+                f"action={decision_data['recommended_action']}"
             )
         except Exception as exc:
             print(f"Failed to save decision log: {exc}")
@@ -111,6 +117,11 @@ class BackendService:
         stop_session(session_id, end_time)
         print(f"Stopped session record: {session_id}")
 
+    def _decide_feedback(self, message: dict[str, Any]) -> DecisionResult | dict[str, Any]:
+        if is_physical_sensor_message(message):
+            return decide_physical_feedback(message)
+        return self.decision_engine.analyze(message)
+
 
 def _payload_to_text(payload: str | bytes) -> str:
     if isinstance(payload, bytes):
@@ -127,10 +138,10 @@ def _parse_json_object(payload: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def build_feedback_command(decision: DecisionResult) -> dict[str, Any]:
+def build_feedback_command(decision: DecisionResult | dict[str, Any]) -> dict[str, Any]:
     """Build an MQTT command payload from a decision result."""
-    decision_data = decision.to_dict()
-    return {
+    decision_data = _decision_to_dict(decision)
+    command = {
         "command": "update_feedback",
         "display_active": decision_data["display_active"],
         "display_message": decision_data["display_message"],
@@ -141,3 +152,20 @@ def build_feedback_command(decision: DecisionResult) -> dict[str, Any]:
         "recommended_action": decision_data["recommended_action"],
         "workout_type": decision_data["workout_type"],
     }
+    for key in (
+        "alert_state",
+        "warning_side",
+        "buzzer_state",
+        "led_state",
+        "lcd_line_1",
+        "lcd_line_2",
+    ):
+        if key in decision_data:
+            command[key] = decision_data[key]
+    return command
+
+
+def _decision_to_dict(decision: DecisionResult | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(decision, dict):
+        return decision
+    return decision.to_dict()

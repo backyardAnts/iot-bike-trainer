@@ -175,6 +175,20 @@ Hardware port assignments:
 Real mode defaults to MQTT broker `localhost` and publishes to the existing
 sensor topic unless `--broker` or `--topic` is provided.
 
+Physical feedback is split between sensing, decision, and execution:
+
+- Raspberry Pi sensors collect speed, cadence, temperature, and side-distance
+  data.
+- The backend AI/decision layer decides feedback for real hardware messages
+  using the original physical controller rule: warn only when the left or right
+  ultrasonic distance is below 50 cm.
+- The backend publishes an `update_feedback` command with the warning side,
+  buzzer state, and two LCD lines.
+- The Raspberry Pi receives the command and only executes it on the buzzer and
+  LCD.
+- If MQTT/backend command feedback is unavailable, real mode falls back to the
+  same extracted physical decision rule locally for safety.
+
 ## Phase 4: Decision Logs in SQLite
 
 The backend now stores every generated decision in the `decision_logs` table.
@@ -360,5 +374,6 @@ python main_virtual_bike.py --mqtt --workout endurance
 
 The backend subscribes to the sensor, status, and command topics and stores
 messages in `data/bike_trainer.db`. Current phases also store decision logs and
-optional session analytics summaries. Streamlit, hardware output, external
-alerts, and advanced analytics are still future work.
+optional session analytics summaries. Real hardware mode can execute backend
+feedback commands on the buzzer/LCD; Streamlit, external alerts, and advanced
+analytics are still future work.

@@ -1,4 +1,4 @@
-"""MQTT command subscriber for the virtual bike."""
+"""MQTT command subscriber for bike feedback commands."""
 
 from __future__ import annotations
 
@@ -36,4 +36,3 @@ class MqttCommandSubscriber:
     def _on_message(self, client: Any, userdata: object, message: Any) -> None:
         result = self.command_handler.handle_command(message.payload)
         print(f"Command result: {result}")
-

@@ -138,7 +138,9 @@ def run_real_mode(
 ) -> None:
     """Read physical GrovePi sensors and optionally publish them to MQTT."""
     from config_layer.mqtt_topics import SENSOR_TOPIC
+    from mqtt_layer.command_handler import CommandHandler
     from mqtt_layer.publisher import MqttPublisher
+    from mqtt_layer.subscriber import MqttCommandSubscriber
     from sensor_layer.real_sensors.real_bike import RealBike
 
     bike = RealBike(
@@ -155,17 +157,23 @@ def run_real_mode(
         enable_temperature=enable_temperature,
         temperature_sensor_type=temperature_sensor_type,
         temperature_debug=temperature_debug,
+        command_feedback_enabled=mqtt_enabled,
+        command_timeout_seconds=max(3.0, float(interval_seconds) * 3.0),
     )
     profile = get_training_profile(bike.workout_type)
     topic = sensor_topic or SENSOR_TOPIC
     client: Any | None = None
     publisher: MqttPublisher | None = None
+    subscriber: MqttCommandSubscriber | None = None
 
     try:
         if mqtt_enabled:
             client = _create_real_mqtt_client(broker_host, broker_port)
             if client is not None:
                 publisher = MqttPublisher(client)
+                subscriber = MqttCommandSubscriber(client, CommandHandler(bike))
+                subscriber.start()
+                bike.set_command_feedback_enabled(True)
                 publisher.publish_status(
                     "started",
                     {
@@ -175,6 +183,8 @@ def run_real_mode(
                         "mode": "real",
                     },
                 )
+            else:
+                bike.set_command_feedback_enabled(False)
 
         print("Real GrovePi bike mode started. Press Ctrl+C to stop.")
         print(f"Workout type: {profile['display_name']}")
@@ -195,6 +205,7 @@ def run_real_mode(
         )
         if mqtt_enabled and publisher is not None:
             print(f"Publishing real sensor JSON to MQTT topic: {topic}")
+            print("Receiving backend feedback commands for buzzer/LCD.")
         elif mqtt_enabled:
             print("MQTT unavailable; real sensor JSON will only print locally.")
 
@@ -218,6 +229,8 @@ def run_real_mode(
     finally:
         if publisher is not None:
             publisher.publish_status("stopped", {"mode": "real"})
+        if subscriber is not None:
+            subscriber.stop()
         if client is not None:
             try:
                 client.loop_stop()
