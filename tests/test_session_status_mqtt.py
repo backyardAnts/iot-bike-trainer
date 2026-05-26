@@ -15,11 +15,27 @@ from mqtt_layer.publisher import MqttPublisher
 class SessionStatusMqttTest(unittest.TestCase):
     def setUp(self) -> None:
         self.saved_status_messages = []
+        self.started_sessions = []
+        self.stopped_sessions = []
+        self.report_payloads = []
         self.original_save_status_message = backend_service_module.save_status_message
+        self.original_start_session = backend_service_module.start_session
+        self.original_stop_session = backend_service_module.stop_session
+        self.original_process_report = (
+            backend_service_module.process_stopped_session_report
+        )
         backend_service_module.save_status_message = self._save_status_message
+        backend_service_module.start_session = self._start_session
+        backend_service_module.stop_session = self._stop_session
+        backend_service_module.process_stopped_session_report = self._process_report
 
     def tearDown(self) -> None:
         backend_service_module.save_status_message = self.original_save_status_message
+        backend_service_module.start_session = self.original_start_session
+        backend_service_module.stop_session = self.original_stop_session
+        backend_service_module.process_stopped_session_report = (
+            self.original_process_report
+        )
 
     def test_started_status_publishes_retained_active_session(self) -> None:
         receiver = MqttBackendReceiver(BackendService())
@@ -53,6 +69,8 @@ class SessionStatusMqttTest(unittest.TestCase):
             "cadence",
         )
         self.assertTrue(receiver.publisher.retained[SESSION_TOPIC])
+        self.assertEqual(len(self.started_sessions), 1)
+        self.assertEqual(self.report_payloads, [])
 
     def test_stopped_status_publishes_retained_stopped_session(self) -> None:
         receiver = MqttBackendReceiver(BackendService())
@@ -81,6 +99,8 @@ class SessionStatusMqttTest(unittest.TestCase):
         self.assertEqual(session_payload["session_id"], "session_123")
         self.assertEqual(session_payload["workout_type"], "cadence")
         self.assertTrue(receiver.publisher.retained[SESSION_TOPIC])
+        self.assertEqual(len(self.stopped_sessions), 1)
+        self.assertEqual(len(self.report_payloads), 1)
 
     def test_missing_session_id_status_is_saved_without_publish(self) -> None:
         receiver = MqttBackendReceiver(BackendService())
@@ -126,6 +146,31 @@ class SessionStatusMqttTest(unittest.TestCase):
 
     def _save_status_message(self, topic: str, payload: str) -> None:
         self.saved_status_messages.append({"topic": topic, "payload": payload})
+
+    def _start_session(
+        self,
+        session_id: str,
+        device_id: str,
+        start_time: str,
+    ) -> None:
+        self.started_sessions.append(
+            {
+                "session_id": session_id,
+                "device_id": device_id,
+                "start_time": start_time,
+            }
+        )
+
+    def _stop_session(self, session_id: str, end_time: str) -> None:
+        self.stopped_sessions.append(
+            {
+                "session_id": session_id,
+                "end_time": end_time,
+            }
+        )
+
+    def _process_report(self, session_payload: dict[str, object]) -> None:
+        self.report_payloads.append(dict(session_payload))
 
 
 class _FakeMqttMessage:

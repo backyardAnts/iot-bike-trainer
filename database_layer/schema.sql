@@ -94,6 +94,19 @@ CREATE TABLE IF NOT EXISTS session_analytics (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS session_report_emails (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL UNIQUE,
+    workout_type TEXT,
+    email_status TEXT NOT NULL,
+    email_to TEXT,
+    report_subject TEXT NOT NULL,
+    report_body TEXT NOT NULL,
+    error_message TEXT,
+    generated_at TEXT NOT NULL,
+    sent_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_sensor_readings_received_at
 ON sensor_readings(received_at);
 
@@ -123,3 +136,6 @@ ON session_analytics(session_id);
 
 CREATE INDEX IF NOT EXISTS idx_session_analytics_created_at
 ON session_analytics(created_at);
+
+CREATE INDEX IF NOT EXISTS idx_session_report_emails_status
+ON session_report_emails(email_status);

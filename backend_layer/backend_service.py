@@ -6,6 +6,7 @@ import json
 import time
 from typing import Any
 
+from analytics_layer.session_report import process_stopped_session_report
 from ai_decision_layer.decision_engine import DecisionEngine
 from ai_decision_layer.decision_result import DecisionResult
 from common.message_schema import validate_sensor_message
@@ -141,7 +142,14 @@ class BackendService:
         status_message = _parse_json_object(payload_text)
         if status_message is None:
             return None
-        return build_session_status_payload(status_message)
+        session_payload = build_session_status_payload(status_message)
+        if session_payload is None:
+            return None
+
+        self._update_session_record_from_status(session_payload)
+        if session_payload["status"] == "stopped":
+            self._send_stopped_session_report(session_payload)
+        return session_payload
 
     def handle_command_message(self, payload: str | bytes) -> None:
         """Save one command payload and update session rows when applicable."""
@@ -174,6 +182,24 @@ class BackendService:
         end_time = str(command_payload.get("timestamp", get_current_timestamp()))
         stop_session(session_id, end_time)
         print(f"Stopped session record: {session_id}")
+
+    def _update_session_record_from_status(self, session_payload: dict[str, Any]) -> None:
+        session_id = str(session_payload["session_id"])
+        timestamp = str(session_payload["timestamp"])
+        if session_payload["status"] == "active":
+            start_session(session_id, str(session_payload["device_id"]), timestamp)
+            return
+
+        stop_session(session_id, timestamp)
+
+    def _send_stopped_session_report(self, session_payload: dict[str, Any]) -> None:
+        try:
+            process_stopped_session_report(session_payload)
+        except Exception as exc:
+            print(
+                "Failed to process stopped-session report for "
+                f"{session_payload.get('session_id')}: {exc}"
+            )
 
     def _decide_feedback(self, message: dict[str, Any]) -> DecisionResult:
         return self.decision_engine.analyze(message)

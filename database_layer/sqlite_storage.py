@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Any
 
 from common.time_utils import get_current_timestamp
@@ -141,6 +142,77 @@ def save_session_analytics(analytics: dict[str, Any]) -> None:
                 int(analytics["time_in_zone_peak"]),
                 str(analytics["improvement_vs_previous_session"]),
             ),
+        )
+
+
+def get_session_report_email_record(session_id: str) -> dict[str, Any] | None:
+    """Return the email-report tracking row for a session, if one exists."""
+    with get_db_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM session_report_emails
+            WHERE session_id = ?
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+
+    return dict(row) if row is not None else None
+
+
+def reserve_session_report_email(
+    session_id: str,
+    workout_type: str,
+    subject: str,
+    body: str,
+) -> bool:
+    """Reserve one session report email so duplicate stopped events cannot resend."""
+    now = get_current_timestamp()
+    try:
+        with get_db_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO session_report_emails (
+                    session_id,
+                    workout_type,
+                    email_status,
+                    email_to,
+                    report_subject,
+                    report_body,
+                    error_message,
+                    generated_at,
+                    sent_at
+                )
+                VALUES (?, ?, 'pending', NULL, ?, ?, NULL, ?, NULL)
+                """,
+                (session_id, workout_type, subject, body, now),
+            )
+    except sqlite3.IntegrityError:
+        return False
+
+    return True
+
+
+def update_session_report_email_result(
+    session_id: str,
+    email_status: str,
+    email_to: str,
+    error_message: str = "",
+) -> None:
+    """Store the final send/skip/failure result for a reserved report email."""
+    sent_at = get_current_timestamp() if email_status == "sent" else None
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            UPDATE session_report_emails
+            SET email_status = ?,
+                email_to = ?,
+                error_message = ?,
+                sent_at = ?
+            WHERE session_id = ?
+            """,
+            (email_status, email_to, error_message, sent_at, session_id),
         )
 
 
