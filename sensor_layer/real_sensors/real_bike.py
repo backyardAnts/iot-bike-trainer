@@ -95,6 +95,7 @@ class RealBike(object):
         self._latest_humidity_percent = None  # type: Optional[float]
         self._last_temperature_error = ""  # type: str
         self._latest_feedback = self._build_safe_feedback()
+        self._latest_workout_feedback = None  # type: Optional[Dict[str, Any]]
         self._last_command_time = None  # type: Optional[float]
         self._last_lcd_lines = None  # type: Optional[Tuple[str, str]]
 
@@ -156,8 +157,15 @@ class RealBike(object):
     def apply_physical_feedback_command(self, command_data: Dict[str, Any]) -> None:
         """Apply an AI/backend feedback command to buzzer and LCD hardware."""
         feedback = self._normalize_feedback_command(command_data)
-        self._latest_feedback = feedback
         self._last_command_time = time.monotonic()
+
+        if self._is_suppressed_backend_safe_feedback(feedback):
+            self._apply_backend_safe_feedback(feedback)
+            return
+
+        if feedback["decision_type"] == "workout_guidance":
+            self._latest_workout_feedback = dict(feedback)
+
         self._apply_hardware_feedback(feedback)
 
     def set_feedback(
@@ -308,11 +316,7 @@ class RealBike(object):
             time.sleep(duration_seconds)
 
     def _should_use_local_feedback_fallback(self) -> bool:
-        if not self.command_feedback_enabled:
-            return True
-        if self._last_command_time is None:
-            return True
-        return time.monotonic() - self._last_command_time > self.command_timeout_seconds
+        return not self.command_feedback_enabled
 
     def _build_feedback_input(
         self,
@@ -338,6 +342,30 @@ class RealBike(object):
         self._latest_feedback = self._normalize_feedback_command(feedback)
         self.buzzer.set_state(bool(self._latest_feedback["buzzer_state"]))
         self._update_lcd(self._latest_feedback)
+
+    def _is_suppressed_backend_safe_feedback(self, feedback: Dict[str, Any]) -> bool:
+        if not self.command_feedback_enabled:
+            return False
+
+        return (
+            feedback["decision_type"] == "physical_safety"
+            and feedback["recommended_action"] == "safe"
+            and feedback["alert_level"] not in {"warning", "danger"}
+        )
+
+    def _apply_backend_safe_feedback(self, feedback: Dict[str, Any]) -> None:
+        self.buzzer.set_state(False)
+        if self._latest_workout_feedback is None:
+            suppressed_feedback = dict(feedback)
+            suppressed_feedback["buzzer_state"] = False
+            suppressed_feedback["led_state"] = False
+            self._latest_feedback = suppressed_feedback
+            return
+
+        restored_feedback = dict(self._latest_workout_feedback)
+        restored_feedback["buzzer_state"] = False
+        restored_feedback["led_state"] = False
+        self._apply_hardware_feedback(restored_feedback)
 
     def _normalize_feedback_command(self, command_data: Dict[str, Any]) -> Dict[str, Any]:
         safe_feedback = self._build_safe_feedback()

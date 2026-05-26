@@ -136,7 +136,7 @@ class PhysicalFeedbackDeciderTest(unittest.TestCase):
         self.assertTrue(bike.buzzer.enabled)
         self.assertEqual(bike.lcd.last_message, ("WARNING LEFT", "Object close"))
 
-    def test_real_bike_safe_backend_command_updates_lcd_when_display_inactive(
+    def test_real_bike_backend_safe_command_does_not_write_safe_lcd(
         self,
     ) -> None:
         bike = _make_fake_real_bike(command_feedback_enabled=True)
@@ -151,13 +151,15 @@ class PhysicalFeedbackDeciderTest(unittest.TestCase):
             "alert_level": "normal",
             "alert_side": "none",
             "buzzer_state": False,
+            "decision_type": "physical_safety",
+            "recommended_action": "safe",
         }
 
         bike.apply_physical_feedback_command(warning_command)
         bike.apply_physical_feedback_command(safe_command)
 
         self.assertFalse(bike.buzzer.enabled)
-        self.assertEqual(bike.lcd.last_message, ("SAFE", "No object close"))
+        self.assertNotEqual(bike.lcd.last_message, ("SAFE", "No object close"))
 
     def test_real_bike_does_not_rewrite_unchanged_lcd_lines(self) -> None:
         bike = _make_fake_real_bike(command_feedback_enabled=True)
@@ -188,6 +190,85 @@ class PhysicalFeedbackDeciderTest(unittest.TestCase):
         self.assertFalse(bike.buzzer.enabled)
         self.assertEqual(bike.lcd.last_message, ("SPD 12.0 HR 120", "Pedal faster"))
 
+    def test_real_bike_safe_command_keeps_latest_workout_guidance(self) -> None:
+        bike = _make_fake_real_bike(command_feedback_enabled=True)
+        workout_command = _make_workout_command(
+            workout_type="cadence",
+            cadence_rpm=84,
+            speed_kmh=12.0,
+            heart_rate_bpm=132,
+        )
+        safe_command = build_feedback_command(
+            decide_physical_feedback(make_sensor_data(2.00, 2.00))
+        )
+
+        bike.apply_physical_feedback_command(workout_command)
+        bike.apply_physical_feedback_command(safe_command)
+
+        self.assertFalse(bike.buzzer.enabled)
+        self.assertEqual(bike.lcd.last_message, ("SPD 12.0 HR 132", "Keep cadence"))
+
+    def test_real_bike_physical_warning_overrides_workout_guidance(self) -> None:
+        bike = _make_fake_real_bike(command_feedback_enabled=True)
+        workout_command = _make_workout_command(
+            workout_type="cadence",
+            cadence_rpm=84,
+            speed_kmh=12.0,
+            heart_rate_bpm=132,
+        )
+        warning_command = build_feedback_command(
+            decide_physical_feedback(make_sensor_data(0.49, 2.00))
+        )
+
+        bike.apply_physical_feedback_command(workout_command)
+        bike.apply_physical_feedback_command(warning_command)
+
+        self.assertTrue(bike.buzzer.enabled)
+        self.assertEqual(bike.lcd.last_message, ("WARNING LEFT", "Object close"))
+
+    def test_real_bike_returns_to_workout_guidance_after_warning(self) -> None:
+        bike = _make_fake_real_bike(command_feedback_enabled=True)
+        workout_command = _make_workout_command(
+            workout_type="cadence",
+            cadence_rpm=84,
+            speed_kmh=12.0,
+            heart_rate_bpm=132,
+        )
+        warning_command = build_feedback_command(
+            decide_physical_feedback(make_sensor_data(0.49, 2.00))
+        )
+
+        bike.apply_physical_feedback_command(workout_command)
+        bike.apply_physical_feedback_command(warning_command)
+        bike.apply_physical_feedback_command(workout_command)
+
+        self.assertFalse(bike.buzzer.enabled)
+        self.assertEqual(bike.lcd.last_message, ("SPD 12.0 HR 132", "Keep cadence"))
+        self.assertNotEqual(bike.lcd.last_message, ("SAFE", "No object close"))
+
+    def test_real_bike_backend_mode_update_does_not_write_local_safe(self) -> None:
+        bike = _make_fake_real_bike(command_feedback_enabled=True)
+        bike.apply_physical_feedback_command(
+            _make_workout_command(
+                workout_type="cadence",
+                cadence_rpm=84,
+                speed_kmh=12.0,
+                heart_rate_bpm=132,
+            )
+        )
+
+        bike.update()
+
+        self.assertEqual(bike.lcd.last_message, ("SPD 12.0 HR 132", "Keep cadence"))
+
+    def test_real_bike_local_fallback_still_shows_safe(self) -> None:
+        bike = _make_fake_real_bike(command_feedback_enabled=False)
+
+        bike.update()
+
+        self.assertFalse(bike.buzzer.enabled)
+        self.assertEqual(bike.lcd.last_message, ("SAFE", "No object close"))
+
 
 class _FakeRealBike:
     def __init__(self) -> None:
@@ -215,15 +296,59 @@ class _FakeLcd:
         self.display_count += 1
 
 
+class _FakeUltrasonicSensors:
+    def read(self) -> tuple[float, float]:
+        return (2.0, 2.0)
+
+    def get_last_status(self) -> dict[str, object]:
+        return {
+            "left_raw_cm": 200,
+            "left_valid": True,
+            "right_raw_cm": 200,
+            "right_valid": True,
+        }
+
+
+def _make_workout_command(
+    workout_type: str,
+    cadence_rpm: int,
+    speed_kmh: float,
+    heart_rate_bpm: int,
+) -> dict[str, object]:
+    decision = DecisionEngine(rider_profile={"age": 20}).analyze(
+        make_workout_sensor_data(
+            workout_type=workout_type,
+            cadence_rpm=cadence_rpm,
+            speed_kmh=speed_kmh,
+            heart_rate_bpm=heart_rate_bpm,
+        )
+    )
+    return build_feedback_command(decision)
+
+
 def _make_fake_real_bike(command_feedback_enabled: bool) -> RealBike:
     bike = object.__new__(RealBike)
+    bike.device_id = "bike_001"
+    bike.session_id = "session_test"
     bike.workout_type = "speed"
+    bike.heart_rate_bpm = 0
+    bike.hall_debug = False
+    bike.temperature_debug = False
+    bike.hall_sensors = None
+    bike.temperature_sensor = None
+    bike.ultrasonic_sensors = _FakeUltrasonicSensors()
     bike.command_feedback_enabled = command_feedback_enabled
     bike.command_timeout_seconds = 3.0
     bike._last_command_time = None
+    bike._latest_message = None
+    bike._latest_status = ""
+    bike._latest_humidity_percent = None
+    bike._last_hall_error = ""
+    bike._last_temperature_error = ""
     bike.buzzer = _FakeBuzzer()
     bike.lcd = _FakeLcd()
     bike._latest_feedback = bike._build_safe_feedback()
+    bike._latest_workout_feedback = None
     bike._last_lcd_lines = None
     return bike
 
