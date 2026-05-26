@@ -186,7 +186,7 @@ class PhysicalFeedbackDeciderTest(unittest.TestCase):
 
         self.assertEqual(decision.decision_type, "workout_guidance")
         self.assertFalse(bike.buzzer.enabled)
-        self.assertEqual(bike.lcd.last_message, ("CADENCE", "Pedal faster"))
+        self.assertEqual(bike.lcd.last_message, ("SPD 12.0 HR 120", "Pedal faster"))
 
 
 class _FakeRealBike:

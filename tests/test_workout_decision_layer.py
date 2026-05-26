@@ -24,7 +24,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
 
         self.assertEqual(decision.decision_type, "workout_guidance")
         self.assertEqual(decision.recommended_action, "increase_speed")
-        self.assertEqual(decision.lcd_line_1, "SPEED")
+        self.assertEqual(decision.lcd_line_1, "SPD 6.0 HR 120")
         self.assertEqual(decision.lcd_line_2, "Increase speed")
         self.assertFalse(decision.buzzer_state)
 
@@ -40,7 +40,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
 
         self.assertEqual(decision.decision_type, "workout_guidance")
         self.assertEqual(decision.recommended_action, "pedal_faster")
-        self.assertEqual(decision.lcd_line_1, "CADENCE")
+        self.assertEqual(decision.lcd_line_1, "SPD 12.0 HR 120")
         self.assertEqual(decision.lcd_line_2, "Pedal faster")
 
     def test_real_hardware_safe_cadence_keeps_cadence(self) -> None:
@@ -55,7 +55,9 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
 
         self.assertEqual(command["decision_type"], "workout_guidance")
         self.assertEqual(command["recommended_action"], "keep_cadence")
-        self.assertEqual(command["lcd_line_1"], "CADENCE")
+        self.assertIn("SPD", command["lcd_line_1"])
+        self.assertIn("HR", command["lcd_line_1"])
+        self.assertEqual(command["lcd_line_1"], "SPD 12.0 HR 132")
         self.assertEqual(command["lcd_line_2"], "Keep cadence")
         self.assertFalse(command["buzzer_state"])
 
@@ -71,7 +73,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
 
         self.assertEqual(command["decision_type"], "workout_guidance")
         self.assertEqual(command["recommended_action"], "pedal_faster")
-        self.assertEqual(command["lcd_line_1"], "CADENCE")
+        self.assertEqual(command["lcd_line_1"], "SPD 0.0 HR 132")
         self.assertEqual(command["lcd_line_2"], "Pedal faster")
         self.assertFalse(command["buzzer_state"])
 
@@ -87,7 +89,8 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
 
         self.assertEqual(command["decision_type"], "workout_guidance")
         self.assertEqual(command["recommended_action"], "increase_speed")
-        self.assertEqual(command["lcd_line_1"], "SPEED")
+        self.assertIn("SPD", command["lcd_line_1"])
+        self.assertEqual(command["lcd_line_1"], "SPD 0.0 HR 132")
         self.assertEqual(command["lcd_line_2"], "Increase speed")
         self.assertFalse(command["buzzer_state"])
 
@@ -104,12 +107,12 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
 
         self.assertEqual(decision.decision_type, "workout_guidance")
         self.assertEqual(decision.recommended_action, "maintain_pace")
-        self.assertEqual(decision.lcd_line_1, "ENDURANCE")
+        self.assertEqual(decision.lcd_line_1, "SPD 14.0 HR 120")
         self.assertEqual(decision.lcd_line_2, "Maintain pace")
         self.assertEqual(decision.hr_percent, 0.6)
         self.assertEqual(command["command"], "update_feedback")
         self.assertEqual(command["decision_type"], "workout_guidance")
-        self.assertEqual(command["lcd_line_1"], "ENDURANCE")
+        self.assertEqual(command["lcd_line_1"], "SPD 14.0 HR 120")
         self.assertEqual(command["lcd_line_2"], "Maintain pace")
         self.assertFalse(command["buzzer_state"])
         self.assertEqual(command["heart_rate_bpm"], 120)
@@ -127,11 +130,11 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
 
         self.assertEqual(decision.decision_type, "workout_guidance")
         self.assertEqual(decision.recommended_action, "recover_now")
-        self.assertEqual(decision.lcd_line_1, "VO2 MAX")
+        self.assertEqual(decision.lcd_line_1, "SPD 24.0 HR 185")
         self.assertEqual(decision.lcd_line_2, "Recover now")
         self.assertEqual(decision.hr_percent, 0.925)
 
-    def test_missing_hr_gives_hr_unavailable(self) -> None:
+    def test_missing_hr_shows_hr_dash_and_check_watch(self) -> None:
         decision = self.engine.analyze(
             _make_sensor_message(
                 workout_type="endurance",
@@ -143,8 +146,10 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         command = build_feedback_command(decision)
 
         self.assertEqual(decision.decision_type, "workout_guidance")
-        self.assertEqual(decision.recommended_action, "hr_unavailable")
-        self.assertEqual(decision.lcd_line_2, "HR unavailable")
+        self.assertEqual(decision.recommended_action, "check_watch")
+        self.assertEqual(decision.lcd_line_1, "SPD 14.0 HR --")
+        self.assertEqual(decision.lcd_line_2, "Check watch")
+        self.assertIn("HR --", command["lcd_line_1"])
         self.assertEqual(command["heart_rate_bpm"], 0)
         self.assertNotIn("hr_percent", command)
 
@@ -188,8 +193,10 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(blocked_command["lcd_line_1"], "WARNING LEFT")
         self.assertTrue(blocked_command["buzzer_state"])
         self.assertEqual(clear_command["decision_type"], "workout_guidance")
-        self.assertEqual(clear_command["lcd_line_1"], "CADENCE")
+        self.assertEqual(clear_command["lcd_line_1"], "SPD 12.0 HR 132")
         self.assertEqual(clear_command["lcd_line_2"], "Keep cadence")
+        self.assertNotEqual(clear_command["lcd_line_1"], "SAFE")
+        self.assertNotEqual(clear_command["lcd_line_2"], "No object close")
         self.assertFalse(clear_command["buzzer_state"])
 
     def _backend_command(self, message: dict[str, object]) -> dict[str, object]:
