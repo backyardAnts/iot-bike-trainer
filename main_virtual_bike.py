@@ -463,7 +463,7 @@ def run_decision_self_test() -> None:
     )
     if (
         high_hr_decision.decision_type != "workout_guidance"
-        or high_hr_decision.recommended_action != "recover_now"
+        or high_hr_decision.recommended_action != "recover"
     ):
         raise RuntimeError(f"Unexpected VO2 max decision: {high_hr_decision}")
 

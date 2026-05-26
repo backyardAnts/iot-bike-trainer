@@ -43,6 +43,69 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.lcd_line_1, "SPD 12.0 HR 120")
         self.assertEqual(decision.lcd_line_2, "Pedal faster")
 
+    def test_cadence_very_high_hr_recovers_instead_of_pedaling_faster(self) -> None:
+        decision = self.engine.analyze(
+            _make_sensor_message(
+                workout_type="cadence",
+                speed_kmh=0.0,
+                cadence_rpm=0,
+                heart_rate_bpm=200,
+            )
+        )
+
+        self.assertEqual(decision.decision_type, "workout_guidance")
+        self.assertEqual(decision.recommended_action, "recover")
+        self.assertEqual(decision.alert_level, "warning")
+        self.assertEqual(decision.lcd_line_1, "SPD 0.0 HR 200")
+        self.assertEqual(decision.lcd_line_2, "Recover now")
+        self.assertFalse(decision.buzzer_state)
+
+    def test_speed_very_high_hr_recovers_instead_of_increasing_speed(self) -> None:
+        decision = self.engine.analyze(
+            _make_sensor_message(
+                workout_type="speed",
+                speed_kmh=0.0,
+                cadence_rpm=70,
+                heart_rate_bpm=200,
+            )
+        )
+
+        self.assertEqual(decision.decision_type, "workout_guidance")
+        self.assertEqual(decision.recommended_action, "recover")
+        self.assertEqual(decision.alert_level, "warning")
+        self.assertEqual(decision.lcd_line_2, "Recover now")
+        self.assertFalse(decision.buzzer_state)
+
+    def test_cadence_near_high_hr_slows_cadence(self) -> None:
+        decision = self.engine.analyze(
+            _make_sensor_message(
+                workout_type="cadence",
+                speed_kmh=12.0,
+                cadence_rpm=45,
+                heart_rate_bpm=175,
+            )
+        )
+
+        self.assertEqual(decision.recommended_action, "slow_cadence")
+        self.assertEqual(decision.alert_level, "warning")
+        self.assertEqual(decision.lcd_line_2, "Slow cadence")
+        self.assertFalse(decision.buzzer_state)
+
+    def test_speed_near_high_hr_reduces_speed(self) -> None:
+        decision = self.engine.analyze(
+            _make_sensor_message(
+                workout_type="speed",
+                speed_kmh=0.0,
+                cadence_rpm=70,
+                heart_rate_bpm=175,
+            )
+        )
+
+        self.assertEqual(decision.recommended_action, "reduce_speed")
+        self.assertEqual(decision.alert_level, "warning")
+        self.assertEqual(decision.lcd_line_2, "Reduce speed")
+        self.assertFalse(decision.buzzer_state)
+
     def test_real_hardware_safe_cadence_keeps_cadence(self) -> None:
         command = self._backend_command(
             _make_real_sensor_message(
@@ -118,21 +181,66 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(command["heart_rate_bpm"], 120)
         self.assertEqual(command["hr_percent"], 0.6)
 
-    def test_vo2_max_high_hr_gives_recover_now(self) -> None:
+    def test_endurance_near_high_hr_reduces_effort(self) -> None:
+        decision = self.engine.analyze(
+            _make_sensor_message(
+                workout_type="endurance",
+                speed_kmh=14.0,
+                cadence_rpm=78,
+                heart_rate_bpm=175,
+            )
+        )
+
+        self.assertEqual(decision.recommended_action, "reduce_effort")
+        self.assertEqual(decision.alert_level, "warning")
+        self.assertEqual(decision.lcd_line_2, "Reduce effort")
+        self.assertFalse(decision.buzzer_state)
+
+    def test_endurance_very_high_hr_recovers_now(self) -> None:
+        decision = self.engine.analyze(
+            _make_sensor_message(
+                workout_type="endurance",
+                speed_kmh=14.0,
+                cadence_rpm=78,
+                heart_rate_bpm=200,
+            )
+        )
+
+        self.assertEqual(decision.recommended_action, "recover")
+        self.assertEqual(decision.alert_level, "warning")
+        self.assertEqual(decision.lcd_line_2, "Recover now")
+
+    def test_vo2_max_near_high_hr_is_near_limit(self) -> None:
         decision = self.engine.analyze(
             _make_sensor_message(
                 workout_type="vo2_max",
                 speed_kmh=24.0,
                 cadence_rpm=95,
-                heart_rate_bpm=185,
+                heart_rate_bpm=175,
+            )
+        )
+
+        self.assertEqual(decision.recommended_action, "near_limit")
+        self.assertEqual(decision.alert_level, "warning")
+        self.assertEqual(decision.lcd_line_2, "Near limit")
+        self.assertFalse(decision.buzzer_state)
+
+    def test_vo2_max_very_high_hr_gives_recover_now(self) -> None:
+        decision = self.engine.analyze(
+            _make_sensor_message(
+                workout_type="vo2_max",
+                speed_kmh=24.0,
+                cadence_rpm=95,
+                heart_rate_bpm=200,
             )
         )
 
         self.assertEqual(decision.decision_type, "workout_guidance")
-        self.assertEqual(decision.recommended_action, "recover_now")
-        self.assertEqual(decision.lcd_line_1, "SPD 24.0 HR 185")
+        self.assertEqual(decision.recommended_action, "recover")
+        self.assertEqual(decision.alert_level, "warning")
+        self.assertEqual(decision.lcd_line_1, "SPD 24.0 HR 200")
         self.assertEqual(decision.lcd_line_2, "Recover now")
-        self.assertEqual(decision.hr_percent, 0.925)
+        self.assertEqual(decision.hr_percent, 1.0)
 
     def test_missing_hr_shows_hr_dash_and_check_watch(self) -> None:
         decision = self.engine.analyze(
@@ -153,6 +261,36 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(command["heart_rate_bpm"], 0)
         self.assertNotIn("hr_percent", command)
 
+    def test_speed_hr_unavailable_still_uses_speed_guidance(self) -> None:
+        decision = self.engine.analyze(
+            _make_sensor_message(
+                workout_type="speed",
+                speed_kmh=0.0,
+                cadence_rpm=70,
+                heart_rate_bpm=0,
+            )
+        )
+
+        self.assertEqual(decision.recommended_action, "increase_speed")
+        self.assertEqual(decision.lcd_line_1, "SPD 0.0 HR --")
+        self.assertEqual(decision.lcd_line_2, "Increase speed")
+        self.assertFalse(decision.buzzer_state)
+
+    def test_cadence_hr_unavailable_still_uses_cadence_guidance(self) -> None:
+        decision = self.engine.analyze(
+            _make_sensor_message(
+                workout_type="cadence",
+                speed_kmh=0.0,
+                cadence_rpm=0,
+                heart_rate_bpm=0,
+            )
+        )
+
+        self.assertEqual(decision.recommended_action, "pedal_faster")
+        self.assertEqual(decision.lcd_line_1, "SPD 0.0 HR --")
+        self.assertEqual(decision.lcd_line_2, "Pedal faster")
+        self.assertFalse(decision.buzzer_state)
+
     def test_physical_safety_warning_overrides_workout_guidance(self) -> None:
         decision = self.engine.analyze(
             _make_sensor_message(
@@ -160,6 +298,22 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
                 speed_kmh=5.0,
                 cadence_rpm=50,
                 heart_rate_bpm=120,
+                left_distance_m=0.49,
+            )
+        )
+
+        self.assertEqual(decision.decision_type, "physical_safety")
+        self.assertEqual(decision.recommended_action, "object_left")
+        self.assertEqual(decision.lcd_line_1, "WARNING LEFT")
+        self.assertTrue(decision.buzzer_state)
+
+    def test_physical_safety_warning_overrides_high_hr(self) -> None:
+        decision = self.engine.analyze(
+            _make_sensor_message(
+                workout_type="cadence",
+                speed_kmh=0.0,
+                cadence_rpm=0,
+                heart_rate_bpm=200,
                 left_distance_m=0.49,
             )
         )

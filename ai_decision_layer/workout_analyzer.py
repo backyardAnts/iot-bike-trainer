@@ -12,8 +12,16 @@ from ai_decision_layer.heart_rate_analyzer import (
 from config_layer.training_profiles import get_training_profile
 
 
-HIGH_HR_PERCENT = 0.85
+HR_WARNING_PERCENT = 0.85
+HR_RECOVERY_PERCENT = 0.90
 LCD_LINE_MAX_LENGTH = 16
+
+HR_WARNING_ACTIONS = {
+    "speed": ("Reduce speed", "reduce_speed"),
+    "cadence": ("Slow cadence", "slow_cadence"),
+    "endurance": ("Reduce effort", "reduce_effort"),
+    "vo2_max": ("Near limit", "near_limit"),
+}
 
 
 def check_workout(
@@ -30,6 +38,14 @@ def check_workout(
         rider_profile,
     )
     lcd_line_1 = _format_lcd_status_line(speed_kmh, heart_rate_bpm, hr_percent)
+    hr_override = _check_hr_override(
+        workout_type,
+        lcd_line_1,
+        heart_rate_bpm,
+        hr_percent,
+    )
+    if hr_override is not None:
+        return hr_override
 
     if workout_type == "endurance":
         return _check_endurance_workout(
@@ -99,8 +115,9 @@ def _check_endurance_workout(
             "increase_effort",
             heart_rate_bpm,
             hr_percent,
+            alert_level="info",
         )
-    if hr_percent <= 0.70:
+    if hr_percent < 0.70:
         return _guidance_decision(
             workout_type,
             lcd_line_1,
@@ -108,14 +125,16 @@ def _check_endurance_workout(
             "maintain_pace",
             heart_rate_bpm,
             hr_percent,
+            alert_level="normal",
         )
     return _guidance_decision(
         workout_type,
         lcd_line_1,
-        "Reduce effort",
-        "reduce_effort",
+        "Ease slightly",
+        "ease_slightly",
         heart_rate_bpm,
         hr_percent,
+        alert_level="info",
     )
 
 
@@ -126,15 +145,6 @@ def _check_speed_workout(
     heart_rate_bpm: int,
     hr_percent: float | None,
 ) -> DecisionResult:
-    if hr_percent is not None and hr_percent > HIGH_HR_PERCENT:
-        return _guidance_decision(
-            workout_type,
-            lcd_line_1,
-            "Recover now",
-            "recover_now",
-            heart_rate_bpm,
-            hr_percent,
-        )
     if speed_kmh < 10.0:
         return _guidance_decision(
             workout_type,
@@ -143,6 +153,17 @@ def _check_speed_workout(
             "increase_speed",
             heart_rate_bpm,
             hr_percent,
+            alert_level="info",
+        )
+    if speed_kmh > 18.0:
+        return _guidance_decision(
+            workout_type,
+            lcd_line_1,
+            "Strong pace",
+            "strong_pace",
+            heart_rate_bpm,
+            hr_percent,
+            alert_level="normal",
         )
     return _guidance_decision(
         workout_type,
@@ -151,6 +172,7 @@ def _check_speed_workout(
         "maintain_speed",
         heart_rate_bpm,
         hr_percent,
+        alert_level="normal",
     )
 
 
@@ -161,7 +183,7 @@ def _check_cadence_workout(
     heart_rate_bpm: int,
     hr_percent: float | None,
 ) -> DecisionResult:
-    if cadence_rpm > 95 and hr_percent is not None and hr_percent > HIGH_HR_PERCENT:
+    if cadence_rpm > 95:
         return _guidance_decision(
             workout_type,
             lcd_line_1,
@@ -169,6 +191,7 @@ def _check_cadence_workout(
             "slow_cadence",
             heart_rate_bpm,
             hr_percent,
+            alert_level="info",
         )
     if cadence_rpm < 60:
         return _guidance_decision(
@@ -178,6 +201,7 @@ def _check_cadence_workout(
             "pedal_faster",
             heart_rate_bpm,
             hr_percent,
+            alert_level="info",
         )
     return _guidance_decision(
         workout_type,
@@ -186,6 +210,7 @@ def _check_cadence_workout(
         "keep_cadence",
         heart_rate_bpm,
         hr_percent,
+        alert_level="normal",
     )
 
 
@@ -212,23 +237,16 @@ def _check_vo2_max_workout(
             "push_harder",
             heart_rate_bpm,
             hr_percent,
-        )
-    if hr_percent <= 0.90:
-        return _guidance_decision(
-            workout_type,
-            lcd_line_1,
-            "Hold interval",
-            "hold_interval",
-            heart_rate_bpm,
-            hr_percent,
+            alert_level="info",
         )
     return _guidance_decision(
         workout_type,
         lcd_line_1,
-        "Recover now",
-        "recover_now",
+        "Hold interval",
+        "hold_interval",
         heart_rate_bpm,
         hr_percent,
+        alert_level="normal",
     )
 
 
@@ -239,12 +257,13 @@ def _guidance_decision(
     recommended_action: str,
     heart_rate_bpm: int,
     hr_percent: float | None,
+    alert_level: str = "info",
 ) -> DecisionResult:
     return DecisionResult(
-        alert_level="info",
+        alert_level=alert_level,
         alert_side="none",
         display_active=True,
-        display_message=f"{lcd_line_1} / {lcd_line_2}",
+        display_message=lcd_line_2,
         speaker_message="",
         decision_type="workout_guidance",
         recommended_action=recommended_action,
@@ -256,6 +275,41 @@ def _guidance_decision(
         heart_rate_bpm=heart_rate_bpm,
         hr_percent=_rounded_hr_percent(hr_percent),
     )
+
+
+def _check_hr_override(
+    workout_type: str,
+    lcd_line_1: str,
+    heart_rate_bpm: int,
+    hr_percent: float | None,
+) -> DecisionResult | None:
+    if hr_percent is None:
+        return None
+
+    if hr_percent >= HR_RECOVERY_PERCENT:
+        return _guidance_decision(
+            workout_type,
+            lcd_line_1,
+            "Recover now",
+            "recover",
+            heart_rate_bpm,
+            hr_percent,
+            alert_level="warning",
+        )
+
+    if hr_percent >= HR_WARNING_PERCENT:
+        lcd_line_2, recommended_action = HR_WARNING_ACTIONS[workout_type]
+        return _guidance_decision(
+            workout_type,
+            lcd_line_1,
+            lcd_line_2,
+            recommended_action,
+            heart_rate_bpm,
+            hr_percent,
+            alert_level="warning",
+        )
+
+    return None
 
 
 def _get_heart_rate_values(
