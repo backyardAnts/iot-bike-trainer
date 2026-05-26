@@ -96,6 +96,7 @@ class RealBike(object):
         self._last_temperature_error = ""  # type: str
         self._latest_feedback = self._build_safe_feedback()
         self._last_command_time = None  # type: Optional[float]
+        self._last_lcd_lines = None  # type: Optional[Tuple[str, str]]
 
     def show_startup_lcd_message(self) -> None:
         """Display a short startup LCD confirmation if LCD is enabled."""
@@ -362,6 +363,11 @@ class RealBike(object):
         )
         lcd_line_1 = str(command_data.get("lcd_line_1", display_message))
         lcd_line_2 = str(command_data.get("lcd_line_2", ""))
+        if alert_level not in {"warning", "danger"} and not buzzer_state:
+            if "lcd_line_1" not in command_data:
+                lcd_line_1 = str(safe_feedback["lcd_line_1"])
+            if "lcd_line_2" not in command_data:
+                lcd_line_2 = str(safe_feedback["lcd_line_2"])
 
         return {
             "command": str(command_data.get("command", "update_feedback")),
@@ -392,10 +398,15 @@ class RealBike(object):
         if self.lcd is None:
             return
 
-        self.lcd.display(
+        lcd_lines = (
             str(feedback.get("lcd_line_1", "")),
             str(feedback.get("lcd_line_2", "")),
         )
+        if lcd_lines == self._last_lcd_lines:
+            return
+
+        self.lcd.display(lcd_lines[0], lcd_lines[1])
+        self._last_lcd_lines = lcd_lines
 
     def _format_status_line(
         self,

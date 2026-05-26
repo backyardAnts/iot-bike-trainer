@@ -89,6 +89,40 @@ class PhysicalFeedbackDeciderTest(unittest.TestCase):
         self.assertTrue(bike.buzzer.enabled)
         self.assertEqual(bike.lcd.last_message, ("WARNING LEFT", "Object close"))
 
+    def test_real_bike_safe_backend_command_updates_lcd_when_display_inactive(
+        self,
+    ) -> None:
+        bike = _make_fake_real_bike(command_feedback_enabled=True)
+        warning_command = build_feedback_command(
+            decide_physical_feedback(make_sensor_data(0.49, 1.00))
+        )
+        safe_command = {
+            "command": "update_feedback",
+            "display_active": False,
+            "display_message": "SAFE",
+            "speaker_message": "",
+            "alert_level": "normal",
+            "alert_side": "none",
+            "buzzer_state": False,
+        }
+
+        bike.apply_physical_feedback_command(warning_command)
+        bike.apply_physical_feedback_command(safe_command)
+
+        self.assertFalse(bike.buzzer.enabled)
+        self.assertEqual(bike.lcd.last_message, ("SAFE", "No object close"))
+
+    def test_real_bike_does_not_rewrite_unchanged_lcd_lines(self) -> None:
+        bike = _make_fake_real_bike(command_feedback_enabled=True)
+        command = build_feedback_command(
+            decide_physical_feedback(make_sensor_data(0.49, 1.00))
+        )
+
+        bike.apply_physical_feedback_command(command)
+        bike.apply_physical_feedback_command(command)
+
+        self.assertEqual(bike.lcd.display_count, 1)
+
 
 class _FakeRealBike:
     def __init__(self) -> None:
@@ -109,9 +143,11 @@ class _FakeBuzzer:
 class _FakeLcd:
     def __init__(self) -> None:
         self.last_message = ("", "")
+        self.display_count = 0
 
     def display(self, line1: str, line2: str = "") -> None:
         self.last_message = (line1, line2)
+        self.display_count += 1
 
 
 def _make_fake_real_bike(command_feedback_enabled: bool) -> RealBike:
@@ -123,6 +159,7 @@ def _make_fake_real_bike(command_feedback_enabled: bool) -> RealBike:
     bike.buzzer = _FakeBuzzer()
     bike.lcd = _FakeLcd()
     bike._latest_feedback = bike._build_safe_feedback()
+    bike._last_lcd_lines = None
     return bike
 
 
