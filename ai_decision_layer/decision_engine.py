@@ -11,6 +11,9 @@ from config_layer.rider_profile import get_default_rider_profile
 from config_layer.training_profiles import is_valid_workout_type, normalize_workout_type
 
 
+PHYSICAL_SAFETY_ACTIONS = {"object_left", "object_right", "object_both"}
+
+
 class DecisionEngine:
     """Apply physical safety and workout rules to one sensor message."""
 
@@ -26,7 +29,7 @@ class DecisionEngine:
                 "workout_type": workout_type,
             }
         )
-        if physical_feedback["alert_level"] != "normal":
+        if _is_physical_safety_override(physical_feedback):
             return _physical_feedback_to_result(physical_feedback)
 
         return check_workout(
@@ -45,6 +48,14 @@ class DecisionEngine:
             )
 
         return normalize_workout_type(workout_type)
+
+
+def _is_physical_safety_override(feedback: dict[str, Any]) -> bool:
+    alert_level = str(feedback.get("alert_level", "")).strip().lower()
+    recommended_action = str(feedback.get("recommended_action", "")).strip().lower()
+    return alert_level in {"warning", "danger"} or (
+        recommended_action in PHYSICAL_SAFETY_ACTIONS
+    )
 
 
 def _physical_feedback_to_result(feedback: dict[str, Any]) -> DecisionResult:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from ai_decision_layer.decision_engine import DecisionEngine
-from backend_layer.backend_service import build_feedback_command
+from backend_layer.backend_service import BackendService, build_feedback_command
 
 
 class WorkoutDecisionLayerTest(unittest.TestCase):
@@ -42,6 +42,54 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.recommended_action, "pedal_faster")
         self.assertEqual(decision.lcd_line_1, "CADENCE")
         self.assertEqual(decision.lcd_line_2, "Pedal faster")
+
+    def test_real_hardware_safe_cadence_keeps_cadence(self) -> None:
+        command = self._backend_command(
+            _make_real_sensor_message(
+                workout_type="cadence",
+                speed_kmh=12.0,
+                cadence_rpm=84,
+                heart_rate_bpm=132,
+            )
+        )
+
+        self.assertEqual(command["decision_type"], "workout_guidance")
+        self.assertEqual(command["recommended_action"], "keep_cadence")
+        self.assertEqual(command["lcd_line_1"], "CADENCE")
+        self.assertEqual(command["lcd_line_2"], "Keep cadence")
+        self.assertFalse(command["buzzer_state"])
+
+    def test_real_hardware_safe_zero_cadence_pedals_faster(self) -> None:
+        command = self._backend_command(
+            _make_real_sensor_message(
+                workout_type="cadence",
+                speed_kmh=0.0,
+                cadence_rpm=0,
+                heart_rate_bpm=132,
+            )
+        )
+
+        self.assertEqual(command["decision_type"], "workout_guidance")
+        self.assertEqual(command["recommended_action"], "pedal_faster")
+        self.assertEqual(command["lcd_line_1"], "CADENCE")
+        self.assertEqual(command["lcd_line_2"], "Pedal faster")
+        self.assertFalse(command["buzzer_state"])
+
+    def test_real_hardware_safe_zero_speed_increases_speed(self) -> None:
+        command = self._backend_command(
+            _make_real_sensor_message(
+                workout_type="speed",
+                speed_kmh=0.0,
+                cadence_rpm=70,
+                heart_rate_bpm=132,
+            )
+        )
+
+        self.assertEqual(command["decision_type"], "workout_guidance")
+        self.assertEqual(command["recommended_action"], "increase_speed")
+        self.assertEqual(command["lcd_line_1"], "SPEED")
+        self.assertEqual(command["lcd_line_2"], "Increase speed")
+        self.assertFalse(command["buzzer_state"])
 
     def test_endurance_target_hr_gives_maintain_pace(self) -> None:
         decision = self.engine.analyze(
@@ -116,6 +164,38 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.lcd_line_1, "WARNING LEFT")
         self.assertTrue(decision.buzzer_state)
 
+    def test_real_hardware_object_removed_returns_to_workout_guidance(self) -> None:
+        blocked_command = self._backend_command(
+            _make_real_sensor_message(
+                workout_type="cadence",
+                speed_kmh=12.0,
+                cadence_rpm=84,
+                heart_rate_bpm=132,
+                left_distance_m=0.49,
+            )
+        )
+        clear_command = self._backend_command(
+            _make_real_sensor_message(
+                workout_type="cadence",
+                speed_kmh=12.0,
+                cadence_rpm=84,
+                heart_rate_bpm=132,
+                left_distance_m=2.0,
+            )
+        )
+
+        self.assertEqual(blocked_command["decision_type"], "physical_safety")
+        self.assertEqual(blocked_command["lcd_line_1"], "WARNING LEFT")
+        self.assertTrue(blocked_command["buzzer_state"])
+        self.assertEqual(clear_command["decision_type"], "workout_guidance")
+        self.assertEqual(clear_command["lcd_line_1"], "CADENCE")
+        self.assertEqual(clear_command["lcd_line_2"], "Keep cadence")
+        self.assertFalse(clear_command["buzzer_state"])
+
+    def _backend_command(self, message: dict[str, object]) -> dict[str, object]:
+        service = BackendService(decision_engine=self.engine)
+        return build_feedback_command(service._decide_feedback(message))
+
 
 def _make_sensor_message(
     workout_type: str,
@@ -142,6 +222,27 @@ def _make_sensor_message(
         "alert_level": "normal",
         "alert_side": "none",
     }
+
+
+def _make_real_sensor_message(
+    workout_type: str,
+    speed_kmh: float,
+    cadence_rpm: int,
+    heart_rate_bpm: int,
+    left_distance_m: float = 2.0,
+    right_distance_m: float = 2.0,
+) -> dict[str, object]:
+    message = _make_sensor_message(
+        workout_type=workout_type,
+        speed_kmh=speed_kmh,
+        cadence_rpm=cadence_rpm,
+        heart_rate_bpm=heart_rate_bpm,
+        left_distance_m=left_distance_m,
+        right_distance_m=right_distance_m,
+    )
+    message["buzzer_state"] = False
+    message["led_state"] = False
+    return message
 
 
 if __name__ == "__main__":
