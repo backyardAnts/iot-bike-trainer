@@ -84,6 +84,8 @@ class PhysicalFeedbackDeciderTest(unittest.TestCase):
 
         self.assertEqual(command["command"], "update_feedback")
         self.assertTrue(command["buzzer_state"])
+        self.assertEqual(command["buzzer_pulse_ms"], 0)
+        self.assertEqual(command["buzzer_pulse_reason"], "")
         self.assertEqual(command["lcd_line_1"], "WARNING LEFT")
         self.assertEqual(command["warning_side"], "left")
 
@@ -97,6 +99,22 @@ class PhysicalFeedbackDeciderTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(bike.last_command["lcd_line_1"], "WARNING RIGHT")
         self.assertTrue(bike.last_command["buzzer_state"])
+
+    def test_command_handler_preserves_buzzer_pulse_fields(self) -> None:
+        command = _make_workout_command(
+            workout_type="speed",
+            cadence_rpm=70,
+            speed_kmh=0.0,
+            heart_rate_bpm=200,
+        )
+        bike = _FakeRealBike()
+
+        result = CommandHandler(bike).handle_command(command)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["buzzer_pulse_ms"], 500)
+        self.assertEqual(result["buzzer_pulse_reason"], "hr_warning")
+        self.assertEqual(bike.last_command["buzzer_pulse_ms"], 500)
 
     def test_deferred_command_handler_does_not_apply_physical_command_in_callback(
         self,
@@ -189,6 +207,72 @@ class PhysicalFeedbackDeciderTest(unittest.TestCase):
         self.assertEqual(decision.decision_type, "workout_guidance")
         self.assertFalse(bike.buzzer.enabled)
         self.assertEqual(bike.lcd.last_message, ("SPD 12.0 HR 120", "Pedal faster"))
+        self.assertEqual(bike.buzzer.beep_durations, [])
+
+    def test_real_bike_urgent_workout_guidance_pulses_buzzer_once(self) -> None:
+        bike = _make_fake_real_bike(command_feedback_enabled=True)
+        command = _make_workout_command(
+            workout_type="speed",
+            cadence_rpm=70,
+            speed_kmh=0.0,
+            heart_rate_bpm=200,
+        )
+
+        bike.apply_physical_feedback_command(command)
+
+        self.assertFalse(bike.buzzer.enabled)
+        self.assertEqual(bike.buzzer.beep_durations, [0.5])
+        self.assertEqual(bike.lcd.last_message, ("SPD 0.0 HR 200", "Recover now"))
+
+    def test_real_bike_duplicate_urgent_workout_command_respects_cooldown(self) -> None:
+        bike = _make_fake_real_bike(command_feedback_enabled=True)
+        command = _make_workout_command(
+            workout_type="speed",
+            cadence_rpm=70,
+            speed_kmh=0.0,
+            heart_rate_bpm=200,
+        )
+
+        bike.apply_physical_feedback_command(command)
+        bike.apply_physical_feedback_command(command)
+
+        self.assertFalse(bike.buzzer.enabled)
+        self.assertEqual(bike.buzzer.beep_durations, [0.5])
+
+    def test_deferred_handler_applies_workout_pulse_from_main_loop_path(self) -> None:
+        bike = _make_fake_real_bike(command_feedback_enabled=True)
+        command = _make_workout_command(
+            workout_type="cadence",
+            cadence_rpm=0,
+            speed_kmh=0.0,
+            heart_rate_bpm=200,
+        )
+        handler = CommandHandler(bike, defer_application=True)
+
+        result = handler.handle_command(command)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "queued")
+        self.assertEqual(result["buzzer_pulse_ms"], 500)
+        self.assertEqual(bike.buzzer.beep_durations, [])
+
+        apply_result = handler.apply_latest_command()
+
+        self.assertIsNotNone(apply_result)
+        self.assertTrue(apply_result["ok"])
+        self.assertEqual(bike.buzzer.beep_durations, [0.5])
+
+    def test_real_bike_physical_warning_does_not_use_workout_pulse(self) -> None:
+        bike = _make_fake_real_bike(command_feedback_enabled=True)
+        warning_command = build_feedback_command(
+            decide_physical_feedback(make_sensor_data(0.49, 2.00))
+        )
+
+        bike.apply_physical_feedback_command(warning_command)
+
+        self.assertTrue(bike.buzzer.enabled)
+        self.assertEqual(bike.buzzer.beep_durations, [])
+        self.assertEqual(warning_command["buzzer_pulse_ms"], 0)
 
     def test_real_bike_safe_command_keeps_latest_workout_guidance(self) -> None:
         bike = _make_fake_real_bike(command_feedback_enabled=True)
@@ -281,9 +365,14 @@ class _FakeRealBike:
 class _FakeBuzzer:
     def __init__(self) -> None:
         self.enabled = False
+        self.beep_durations = []
 
     def set_state(self, enabled: bool) -> None:
         self.enabled = bool(enabled)
+
+    def beep(self, duration: float = 0.2) -> None:
+        self.beep_durations.append(float(duration))
+        self.enabled = False
 
 
 class _FakeLcd:
@@ -350,6 +439,8 @@ def _make_fake_real_bike(command_feedback_enabled: bool) -> RealBike:
     bike._latest_feedback = bike._build_safe_feedback()
     bike._latest_workout_feedback = None
     bike._last_lcd_lines = None
+    bike._last_workout_buzzer_pulse_time = None
+    bike._last_workout_buzzer_pulse_action = ""
     return bike
 
 

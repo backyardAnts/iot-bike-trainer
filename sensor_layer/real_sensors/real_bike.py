@@ -25,6 +25,7 @@ from sensor_layer.real_sensors.ultrasonic_sensors import UltrasonicSensors
 
 
 WARNING_THRESHOLD_CM = PHYSICAL_WARNING_THRESHOLD_CM
+WORKOUT_BUZZER_PULSE_COOLDOWN_SECONDS = 10.0
 
 
 class RealBike(object):
@@ -98,6 +99,8 @@ class RealBike(object):
         self._latest_workout_feedback = None  # type: Optional[Dict[str, Any]]
         self._last_command_time = None  # type: Optional[float]
         self._last_lcd_lines = None  # type: Optional[Tuple[str, str]]
+        self._last_workout_buzzer_pulse_time = None  # type: Optional[float]
+        self._last_workout_buzzer_pulse_action = ""  # type: str
 
     def show_startup_lcd_message(self) -> None:
         """Display a short startup LCD confirmation if LCD is enabled."""
@@ -167,6 +170,7 @@ class RealBike(object):
             self._latest_workout_feedback = dict(feedback)
 
         self._apply_hardware_feedback(feedback)
+        self._apply_workout_buzzer_pulse(self._latest_feedback)
 
     def set_feedback(
         self,
@@ -343,6 +347,31 @@ class RealBike(object):
         self.buzzer.set_state(bool(self._latest_feedback["buzzer_state"]))
         self._update_lcd(self._latest_feedback)
 
+    def _apply_workout_buzzer_pulse(self, feedback: Dict[str, Any]) -> None:
+        if feedback.get("decision_type") != "workout_guidance":
+            return
+        if bool(feedback.get("buzzer_state", False)):
+            return
+
+        pulse_ms = _coerce_int(feedback.get("buzzer_pulse_ms", 0), 0)
+        if pulse_ms <= 0:
+            return
+
+        recommended_action = str(feedback.get("recommended_action", ""))
+        now = time.monotonic()
+        if (
+            recommended_action == self._last_workout_buzzer_pulse_action
+            and self._last_workout_buzzer_pulse_time is not None
+            and (
+                now - self._last_workout_buzzer_pulse_time
+            ) < WORKOUT_BUZZER_PULSE_COOLDOWN_SECONDS
+        ):
+            return
+
+        self.buzzer.beep(pulse_ms / 1000.0)
+        self._last_workout_buzzer_pulse_time = now
+        self._last_workout_buzzer_pulse_action = recommended_action
+
     def _is_suppressed_backend_safe_feedback(self, feedback: Dict[str, Any]) -> bool:
         if not self.command_feedback_enabled:
             return False
@@ -408,6 +437,11 @@ class RealBike(object):
             "speaker_message": speaker_message,
             "buzzer_state": buzzer_state,
             "led_state": _coerce_bool(command_data.get("led_state", False)),
+            "buzzer_pulse_ms": _coerce_int(
+                command_data.get("buzzer_pulse_ms", 0),
+                0,
+            ),
+            "buzzer_pulse_reason": str(command_data.get("buzzer_pulse_reason", "")),
             "lcd_line_1": lcd_line_1,
             "lcd_line_2": lcd_line_2,
             "decision_type": str(
@@ -490,3 +524,12 @@ def _coerce_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default

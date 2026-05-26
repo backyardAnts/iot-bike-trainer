@@ -59,6 +59,8 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.lcd_line_1, "SPD 0.0 HR 200")
         self.assertEqual(decision.lcd_line_2, "Recover now")
         self.assertFalse(decision.buzzer_state)
+        self.assertEqual(decision.buzzer_pulse_ms, 500)
+        self.assertEqual(decision.buzzer_pulse_reason, "hr_warning")
 
     def test_speed_very_high_hr_recovers_instead_of_increasing_speed(self) -> None:
         decision = self.engine.analyze(
@@ -69,12 +71,16 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
                 heart_rate_bpm=200,
             )
         )
+        command = build_feedback_command(decision)
 
         self.assertEqual(decision.decision_type, "workout_guidance")
         self.assertEqual(decision.recommended_action, "recover")
         self.assertEqual(decision.alert_level, "warning")
         self.assertEqual(decision.lcd_line_2, "Recover now")
         self.assertFalse(decision.buzzer_state)
+        self.assertEqual(decision.buzzer_pulse_ms, 500)
+        self.assertEqual(command["buzzer_pulse_ms"], 500)
+        self.assertEqual(command["buzzer_pulse_reason"], "hr_warning")
 
     def test_cadence_near_high_hr_slows_cadence(self) -> None:
         decision = self.engine.analyze(
@@ -90,6 +96,8 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.alert_level, "warning")
         self.assertEqual(decision.lcd_line_2, "Slow cadence")
         self.assertFalse(decision.buzzer_state)
+        self.assertEqual(decision.buzzer_pulse_ms, 500)
+        self.assertEqual(decision.buzzer_pulse_reason, "hr_warning")
 
     def test_speed_near_high_hr_reduces_speed(self) -> None:
         decision = self.engine.analyze(
@@ -105,6 +113,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.alert_level, "warning")
         self.assertEqual(decision.lcd_line_2, "Reduce speed")
         self.assertFalse(decision.buzzer_state)
+        self.assertEqual(decision.buzzer_pulse_ms, 500)
 
     def test_real_hardware_safe_cadence_keeps_cadence(self) -> None:
         command = self._backend_command(
@@ -123,6 +132,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(command["lcd_line_1"], "SPD 12.0 HR 132")
         self.assertEqual(command["lcd_line_2"], "Keep cadence")
         self.assertFalse(command["buzzer_state"])
+        self.assertEqual(command["buzzer_pulse_ms"], 0)
 
     def test_real_hardware_safe_zero_cadence_pedals_faster(self) -> None:
         command = self._backend_command(
@@ -195,6 +205,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.alert_level, "warning")
         self.assertEqual(decision.lcd_line_2, "Reduce effort")
         self.assertFalse(decision.buzzer_state)
+        self.assertEqual(decision.buzzer_pulse_ms, 500)
 
     def test_endurance_very_high_hr_recovers_now(self) -> None:
         decision = self.engine.analyze(
@@ -209,6 +220,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.recommended_action, "recover")
         self.assertEqual(decision.alert_level, "warning")
         self.assertEqual(decision.lcd_line_2, "Recover now")
+        self.assertEqual(decision.buzzer_pulse_ms, 500)
 
     def test_vo2_max_near_high_hr_is_near_limit(self) -> None:
         decision = self.engine.analyze(
@@ -224,6 +236,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.alert_level, "warning")
         self.assertEqual(decision.lcd_line_2, "Near limit")
         self.assertFalse(decision.buzzer_state)
+        self.assertEqual(decision.buzzer_pulse_ms, 500)
 
     def test_vo2_max_very_high_hr_gives_recover_now(self) -> None:
         decision = self.engine.analyze(
@@ -241,6 +254,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.lcd_line_1, "SPD 24.0 HR 200")
         self.assertEqual(decision.lcd_line_2, "Recover now")
         self.assertEqual(decision.hr_percent, 1.0)
+        self.assertEqual(decision.buzzer_pulse_ms, 500)
 
     def test_missing_hr_shows_hr_dash_and_check_watch(self) -> None:
         decision = self.engine.analyze(
@@ -275,6 +289,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.lcd_line_1, "SPD 0.0 HR --")
         self.assertEqual(decision.lcd_line_2, "Increase speed")
         self.assertFalse(decision.buzzer_state)
+        self.assertEqual(decision.buzzer_pulse_ms, 0)
 
     def test_cadence_hr_unavailable_still_uses_cadence_guidance(self) -> None:
         decision = self.engine.analyze(
@@ -290,6 +305,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.lcd_line_1, "SPD 0.0 HR --")
         self.assertEqual(decision.lcd_line_2, "Pedal faster")
         self.assertFalse(decision.buzzer_state)
+        self.assertEqual(decision.buzzer_pulse_ms, 0)
 
     def test_physical_safety_warning_overrides_workout_guidance(self) -> None:
         decision = self.engine.analyze(
@@ -306,6 +322,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.recommended_action, "object_left")
         self.assertEqual(decision.lcd_line_1, "WARNING LEFT")
         self.assertTrue(decision.buzzer_state)
+        self.assertEqual(decision.buzzer_pulse_ms, 0)
 
     def test_physical_safety_warning_overrides_high_hr(self) -> None:
         decision = self.engine.analyze(
@@ -322,6 +339,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertEqual(decision.recommended_action, "object_left")
         self.assertEqual(decision.lcd_line_1, "WARNING LEFT")
         self.assertTrue(decision.buzzer_state)
+        self.assertEqual(decision.buzzer_pulse_ms, 0)
 
     def test_real_hardware_object_removed_returns_to_workout_guidance(self) -> None:
         blocked_command = self._backend_command(

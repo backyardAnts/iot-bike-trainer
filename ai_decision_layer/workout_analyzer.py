@@ -22,6 +22,14 @@ HR_WARNING_ACTIONS = {
     "endurance": ("Reduce effort", "reduce_effort"),
     "vo2_max": ("Near limit", "near_limit"),
 }
+URGENT_WORKOUT_ACTIONS = {
+    "recover",
+    "reduce_speed",
+    "slow_cadence",
+    "reduce_effort",
+    "near_limit",
+}
+URGENT_WORKOUT_BUZZER_PULSE_MS = 500
 
 
 def check_workout(
@@ -259,6 +267,12 @@ def _guidance_decision(
     hr_percent: float | None,
     alert_level: str = "info",
 ) -> DecisionResult:
+    pulse_ms = 0
+    pulse_reason = ""
+    if recommended_action in URGENT_WORKOUT_ACTIONS:
+        pulse_ms = URGENT_WORKOUT_BUZZER_PULSE_MS
+        pulse_reason = "hr_warning"
+
     return DecisionResult(
         alert_level=alert_level,
         alert_side="none",
@@ -272,6 +286,8 @@ def _guidance_decision(
         lcd_line_2=lcd_line_2,
         buzzer_state=False,
         led_state=False,
+        buzzer_pulse_ms=pulse_ms,
+        buzzer_pulse_reason=pulse_reason,
         heart_rate_bpm=heart_rate_bpm,
         hr_percent=_rounded_hr_percent(hr_percent),
     )

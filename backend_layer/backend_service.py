@@ -272,6 +272,8 @@ def build_feedback_command(decision: DecisionResult | dict[str, Any]) -> dict[st
         "warning_side",
         "buzzer_state",
         "led_state",
+        "buzzer_pulse_ms",
+        "buzzer_pulse_reason",
         "lcd_line_1",
         "lcd_line_2",
         "heart_rate_bpm",

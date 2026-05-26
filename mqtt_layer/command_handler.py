@@ -113,6 +113,8 @@ class CommandHandler:
                 decision_type=command_data.get("decision_type"),
                 recommended_action=command_data.get("recommended_action"),
                 workout_type=command_data.get("workout_type"),
+                buzzer_pulse_ms=command_data.get("buzzer_pulse_ms"),
+                buzzer_pulse_reason=command_data.get("buzzer_pulse_reason"),
             )
 
         if command == "CLEAR_FEEDBACK":
@@ -166,6 +168,8 @@ class CommandHandler:
             decision_type=command_data.get("decision_type"),
             recommended_action=command_data.get("recommended_action"),
             workout_type=command_data.get("workout_type"),
+            buzzer_pulse_ms=command_data.get("buzzer_pulse_ms"),
+            buzzer_pulse_reason=command_data.get("buzzer_pulse_reason"),
         )
 
     def _parse_payload(self, payload: str | bytes | dict[str, Any]) -> dict[str, Any] | None:

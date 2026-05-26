@@ -119,6 +119,8 @@ def _feedback(
         "speaker_message": speaker_message,
         "buzzer_state": buzzer_state,
         "led_state": False,
+        "buzzer_pulse_ms": 0,
+        "buzzer_pulse_reason": "",
         "lcd_line_1": lcd_line_1,
         "lcd_line_2": lcd_line_2,
         "decision_type": "physical_safety",

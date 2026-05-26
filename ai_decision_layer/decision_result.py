@@ -22,6 +22,8 @@ class DecisionResult:
     lcd_line_2: str = ""
     buzzer_state: bool = False
     led_state: bool = False
+    buzzer_pulse_ms: int = 0
+    buzzer_pulse_reason: str = ""
     heart_rate_bpm: int = 0
     hr_percent: float | None = None
 

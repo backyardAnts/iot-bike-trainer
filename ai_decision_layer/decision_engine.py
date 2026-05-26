@@ -72,6 +72,8 @@ def _physical_feedback_to_result(feedback: dict[str, Any]) -> DecisionResult:
         lcd_line_2=str(feedback.get("lcd_line_2", "")),
         buzzer_state=bool(feedback.get("buzzer_state", False)),
         led_state=bool(feedback.get("led_state", False)),
+        buzzer_pulse_ms=int(feedback.get("buzzer_pulse_ms", 0)),
+        buzzer_pulse_reason=str(feedback.get("buzzer_pulse_reason", "")),
         heart_rate_bpm=int(feedback.get("heart_rate_bpm", 0)),
         hr_percent=feedback.get("hr_percent"),
     )
