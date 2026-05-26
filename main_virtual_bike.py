@@ -12,6 +12,8 @@ from common.message_schema import message_to_json, validate_sensor_message
 from config_layer.settings import (
     DEFAULT_RANDOM_SEED,
     DEFAULT_SAMPLE_INTERVAL_SECONDS,
+    MQTT_BROKER_HOST,
+    MQTT_BROKER_PORT,
 )
 from config_layer.training_profiles import (
     DEFAULT_WORKOUT_TYPE,
@@ -96,6 +98,8 @@ def run_mqtt_mode(
         )
         print(f"Workout type: {profile['display_name']}")
         print(f"Session ID: {bike.session_id}")
+        print(f"MQTT broker: {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT}")
+        print(f"MQTT sensor topic: {SENSOR_TOPIC}")
         print("Virtual bike MQTT simulator started. Press Ctrl+C to stop.")
 
         while True:
@@ -121,8 +125,8 @@ def run_real_mode(
     session_id: Optional[str] = None,
     interval_seconds: float = DEFAULT_SAMPLE_INTERVAL_SECONDS,
     mqtt_enabled: bool = False,
-    broker_host: str = "localhost",
-    broker_port: int = 1883,
+    broker_host: Optional[str] = None,
+    broker_port: Optional[int] = None,
     sensor_topic: Optional[str] = None,
     heart_rate_bpm: int = 0,
     lcd_enabled: bool = True,
@@ -168,10 +172,16 @@ def run_real_mode(
 
     try:
         if mqtt_enabled:
-            client = _create_real_mqtt_client(broker_host, broker_port)
-            if client is not None:
+            try:
+                from mqtt_layer.mqtt_client import create_mqtt_client
+
+                client = create_mqtt_client(
+                    broker_host=broker_host,
+                    broker_port=broker_port,
+                )
                 publisher = MqttPublisher(client)
                 subscriber = MqttCommandSubscriber(client, CommandHandler(bike))
+                client.loop_start()
                 subscriber.start()
                 bike.set_command_feedback_enabled(True)
                 publisher.publish_status(
@@ -183,7 +193,8 @@ def run_real_mode(
                         "mode": "real",
                     },
                 )
-            else:
+            except Exception as exc:
+                print(f"MQTT unavailable; continuing with local fallback: {exc}")
                 bike.set_command_feedback_enabled(False)
 
         print("Real GrovePi bike mode started. Press Ctrl+C to stop.")
@@ -204,6 +215,9 @@ def run_real_mode(
             )
         )
         if mqtt_enabled and publisher is not None:
+            mqtt_host = broker_host or MQTT_BROKER_HOST
+            mqtt_port = broker_port if broker_port is not None else MQTT_BROKER_PORT
+            print(f"MQTT broker: {mqtt_host}:{mqtt_port}")
             print(f"Publishing real sensor JSON to MQTT topic: {topic}")
             print("Receiving backend feedback commands for buzzer/LCD.")
         elif mqtt_enabled:
@@ -239,41 +253,6 @@ def run_real_mode(
                 print(f"MQTT cleanup failed: {exc}")
         bike.cleanup()
         print("Real GrovePi bike mode stopped.")
-
-
-def _create_real_mqtt_client(broker_host: str, broker_port: int) -> Optional[Any]:
-    """Create a lightweight MQTT client for real hardware mode."""
-    import uuid
-
-    try:
-        import paho.mqtt.client as mqtt
-    except ImportError as exc:
-        print(f"MQTT disabled: paho-mqtt is not installed: {exc}")
-        return None
-
-    client_id = f"real_bike_001_{uuid.uuid4().hex[:8]}"
-    if hasattr(mqtt, "CallbackAPIVersion"):
-        client = mqtt.Client(
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-            client_id=client_id,
-            protocol=mqtt.MQTTv311,
-        )
-    else:
-        client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
-
-    try:
-        print(f"Connecting real-mode MQTT client to {broker_host}:{broker_port}...")
-        client.connect(broker_host, int(broker_port), 60)
-        client.loop_start()
-        return client
-    except Exception as exc:
-        print(f"MQTT connection failed; continuing without MQTT: {exc}")
-        try:
-            client.disconnect()
-        except Exception:
-            pass
-        return None
-
 
 def run_self_test(reading_count: int = 10) -> None:
     """Run a short deterministic simulation and validate each message."""
@@ -758,14 +737,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--broker",
-        default="localhost",
-        help="MQTT broker host for real hardware mode",
+        help=(
+            "optional MQTT broker host override for real hardware mode "
+            f"(default: {MQTT_BROKER_HOST})"
+        ),
     )
     parser.add_argument(
         "--mqtt-port",
         type=int,
-        default=1883,
-        help="MQTT broker port for real hardware mode",
+        help=(
+            "optional MQTT broker port override for real hardware mode "
+            f"(default: {MQTT_BROKER_PORT})"
+        ),
     )
     parser.add_argument(
         "--topic",

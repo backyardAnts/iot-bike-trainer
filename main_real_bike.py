@@ -5,7 +5,11 @@ from __future__ import annotations
 import argparse
 import time
 
-from config_layer.settings import DEFAULT_SAMPLE_INTERVAL_SECONDS
+from config_layer.settings import (
+    DEFAULT_SAMPLE_INTERVAL_SECONDS,
+    MQTT_BROKER_HOST,
+    MQTT_BROKER_PORT,
+)
 from config_layer.training_profiles import DEFAULT_WORKOUT_TYPE
 from main_virtual_bike import run_real_mode
 
@@ -53,14 +57,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--broker",
-        default="localhost",
-        help="MQTT broker host",
+        help=f"optional MQTT broker host override (default: {MQTT_BROKER_HOST})",
     )
     parser.add_argument(
         "--mqtt-port",
         type=int,
-        default=1883,
-        help="MQTT broker port",
+        help=f"optional MQTT broker port override (default: {MQTT_BROKER_PORT})",
     )
     parser.add_argument(
         "--topic",

@@ -172,8 +172,10 @@ Hardware port assignments:
 - D7: buzzer
 - I2C: Grove LCD screen
 
-Real mode defaults to MQTT broker `localhost` and publishes to the existing
-sensor topic unless `--broker` or `--topic` is provided.
+Real mode uses the same MQTT client, broker settings, and sensor topic as
+virtual mode. The default broker comes from `config_layer/settings.py` or the
+same `.env` variables used by virtual mode; `--broker`, `--mqtt-port`, and
+`--topic` are optional overrides.
 
 Physical feedback is split between sensing, decision, and execution:
 

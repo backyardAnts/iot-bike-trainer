@@ -17,9 +17,14 @@ from config_layer.settings import (
 )
 
 
-def create_mqtt_client() -> mqtt.Client:
+def create_mqtt_client(
+    broker_host: str | None = None,
+    broker_port: int | None = None,
+) -> mqtt.Client:
     """Create, configure, and connect an MQTT client."""
     client_id = f"{MQTT_CLIENT_ID_PREFIX}_{uuid.uuid4().hex[:8]}"
+    host = broker_host or MQTT_BROKER_HOST
+    port = int(broker_port if broker_port is not None else MQTT_BROKER_PORT)
     client = _create_paho_client(client_id)
 
     client.on_connect = _on_connect
@@ -32,11 +37,8 @@ def create_mqtt_client() -> mqtt.Client:
     if MQTT_USE_TLS:
         client.tls_set()
 
-    print(
-        f"Connecting MQTT client {client_id} to "
-        f"{MQTT_BROKER_HOST}:{MQTT_BROKER_PORT}..."
-    )
-    client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, MQTT_KEEPALIVE_SECONDS)
+    print(f"Connecting MQTT client {client_id} to {host}:{port}...")
+    client.connect(host, port, MQTT_KEEPALIVE_SECONDS)
     return client
 
 
@@ -78,4 +80,3 @@ def _extract_disconnect_reason(args: tuple[object, ...]) -> object:
 
     reason = args[-2] if len(args) >= 2 else args[-1]
     return getattr(reason, "value", reason)
-
