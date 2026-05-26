@@ -42,6 +42,7 @@ class BackendService:
         self.heart_rate_timeout_seconds = float(heart_rate_timeout_seconds)
         self._clock = monotonic_clock or time.monotonic
         self._latest_heart_rates = {}  # type: dict[tuple[str, str], dict[str, Any]]
+        self._latest_merged_sensor_message = None  # type: dict[str, Any] | None
 
     def handle_sensor_message(
         self,
@@ -49,6 +50,7 @@ class BackendService:
         source_topic: str | None = None,
     ) -> dict[str, Any] | None:
         """Validate, save, analyze, and return an optional feedback command."""
+        self._latest_merged_sensor_message = None
         payload_text = _payload_to_text(payload)
         message = _parse_json_object(payload_text)
 
@@ -61,6 +63,7 @@ class BackendService:
             return None
 
         message = self._merge_latest_heart_rate(message)
+        self._latest_merged_sensor_message = dict(message)
 
         save_sensor_reading(message)
         print(
@@ -93,6 +96,16 @@ class BackendService:
             print(f"Failed to save decision log: {exc}")
 
         return build_feedback_command(decision)
+
+    def get_latest_merged_sensor_message(self) -> dict[str, Any] | None:
+        """Return the last backend-processed sensor message for MQTT output."""
+        if self._latest_merged_sensor_message is None:
+            return None
+
+        message = dict(self._latest_merged_sensor_message)
+        message.setdefault("buzzer_state", False)
+        message.setdefault("led_state", False)
+        return message
 
     def handle_heart_rate_message(self, payload: str | bytes) -> bool:
         """Validate and cache one Samsung Watch heart-rate MQTT payload."""

@@ -10,7 +10,11 @@ from ai_decision_layer.decision_result import DecisionResult
 from backend_layer.mqtt_receiver import MqttBackendReceiver
 from backend_layer.backend_service import BackendService, parse_heart_rate_message
 from common.message_schema import build_sensor_message
-from config_layer.mqtt_topics import HEART_RATE_TOPIC
+from config_layer.mqtt_topics import (
+    HEART_RATE_TOPIC,
+    MERGED_SENSORS_TOPIC,
+    SENSOR_TOPIC,
+)
 
 
 class HeartRateMqttMergeTest(unittest.TestCase):
@@ -143,6 +147,66 @@ class HeartRateMqttMergeTest(unittest.TestCase):
 
         self.assertEqual(service.last_payload, b'{"heart_rate_bpm":128}')
 
+    def test_backend_receiver_publishes_merged_sensor_with_watch_heart_rate(self) -> None:
+        clock = _FakeClock(100.0)
+        service = BackendService(
+            decision_engine=_FakeDecisionEngine(),
+            heart_rate_timeout_seconds=10.0,
+            monotonic_clock=clock,
+        )
+        receiver = MqttBackendReceiver(service)
+        receiver.publisher = _FakePublisher()
+
+        receiver._on_message(
+            None,
+            None,
+            _FakeMqttMessage(
+                HEART_RATE_TOPIC,
+                json.dumps(
+                    {
+                        "device_id": "bike_001",
+                        "session_id": "session_001",
+                        "timestamp": "2026-05-26T12:00:00",
+                        "heart_rate_bpm": 132,
+                        "source": "samsung_watch_5_pro",
+                    }
+                ).encode("utf-8"),
+            ),
+        )
+        receiver._on_message(
+            None,
+            None,
+            _FakeMqttMessage(
+                SENSOR_TOPIC,
+                json.dumps(_make_sensor_message("session_001")).encode("utf-8"),
+            ),
+        )
+
+        merged_payload = receiver.publisher.payloads[MERGED_SENSORS_TOPIC]
+        self.assertEqual(merged_payload["heart_rate_bpm"], 132)
+        self.assertEqual(
+            set(merged_payload.keys()),
+            {
+                "device_id",
+                "timestamp",
+                "session_id",
+                "workout_type",
+                "speed_kmh",
+                "cadence_rpm",
+                "heart_rate_bpm",
+                "temperature_c",
+                "left_distance_m",
+                "right_distance_m",
+                "display_active",
+                "display_message",
+                "speaker_message",
+                "alert_level",
+                "alert_side",
+                "buzzer_state",
+                "led_state",
+            },
+        )
+
     def _save_sensor_reading(self, message: dict[str, object]) -> None:
         self.saved_sensor_messages.append(dict(message))
 
@@ -199,6 +263,15 @@ class _FakeMqttMessage:
     def __init__(self, topic: str, payload: bytes) -> None:
         self.topic = topic
         self.payload = payload
+
+
+class _FakePublisher:
+    def __init__(self) -> None:
+        self.payloads = {}
+
+    def publish_json(self, topic: str, payload: dict[str, object]) -> bool:
+        self.payloads[topic] = dict(payload)
+        return True
 
 
 def _make_sensor_message(session_id: str) -> dict[str, object]:

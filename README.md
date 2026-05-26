@@ -134,11 +134,12 @@ python main_virtual_bike.py --mqtt --workout cadence
 
 Expected behavior:
 
-- The bike publishes sensor messages to `anthony/bike_001/sensors`.
+- The bike publishes raw sensor messages to `anthony/bike_001/sensors`.
 - A paired Android phone can publish Samsung Watch 5 Pro heart-rate messages to
   `anthony/bike_001/heart_rate`.
-- The backend saves valid sensor messages, runs the decision layer, and prints
-  the selected decision.
+- The backend merges valid bike and heart-rate messages, saves the merged sensor
+  reading, runs the decision layer, and publishes the final reading to
+  `anthony/bike_001/merged_sensors`.
 - The backend publishes feedback commands to `anthony/bike_001/commands`.
 - The virtual bike receives `update_feedback` commands and future sensor
   messages show updated `display_active`, `display_message`, `speaker_message`,
@@ -207,10 +208,21 @@ the Raspberry Pi. The watch measures heart rate, the paired phone publishes:
 ```
 
 The backend subscribes to `anthony/bike_001/heart_rate`, caches the latest valid
-heart-rate value per device/session, and merges recent values into bike sensor
-messages before saving them to SQLite and running decisions. Expired values are
-not reused indefinitely. This is for training feedback and analytics, not
-medical diagnosis.
+heart-rate value per device/session, and merges recent values into raw bike
+sensor messages before saving them to SQLite and running decisions. It publishes
+the backend-processed final reading to `anthony/bike_001/merged_sensors`.
+Expired values are not reused indefinitely. This is for training feedback and
+analytics, not medical diagnosis.
+
+MQTT topic roles:
+
+- `anthony/bike_001/sensors`: raw Raspberry Pi bike data.
+- `anthony/bike_001/heart_rate`: Samsung Watch 5 Pro values sent by the paired
+  Android phone.
+- `anthony/bike_001/merged_sensors`: backend final sensor data for frontend,
+  dashboard, and real-mode terminal display.
+- `anthony/bike_001/commands`: backend feedback/actions sent back to the
+  Raspberry Pi for buzzer/LCD execution.
 
 ## Phase 4: Decision Logs in SQLite
 
@@ -395,8 +407,10 @@ Then run the virtual bike MQTT publisher in another terminal:
 python main_virtual_bike.py --mqtt --workout endurance
 ```
 
-The backend subscribes to the sensor, heart-rate, status, and command topics and stores
-messages in `data/bike_trainer.db`. Current phases also store decision logs and
-optional session analytics summaries. Real hardware mode can execute backend
-feedback commands on the buzzer/LCD; Streamlit, external alerts, and advanced
-analytics are still future work.
+The backend subscribes to the raw sensor, heart-rate, status, and command topics
+and stores merged readings in `data/bike_trainer.db`. Frontend/dashboard clients
+should subscribe to `anthony/bike_001/merged_sensors`, not the raw sensor topic.
+Current phases also store decision logs and optional session analytics
+summaries. Real hardware mode can execute backend feedback commands on the
+buzzer/LCD; Streamlit, external alerts, and advanced analytics are still future
+work.

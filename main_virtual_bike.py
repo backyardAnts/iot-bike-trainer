@@ -141,7 +141,7 @@ def run_real_mode(
     temperature_debug: bool = False,
 ) -> None:
     """Read physical GrovePi sensors and optionally publish them to MQTT."""
-    from config_layer.mqtt_topics import SENSOR_TOPIC
+    from config_layer.mqtt_topics import MERGED_SENSORS_TOPIC, SENSOR_TOPIC
     from mqtt_layer.command_handler import CommandHandler
     from mqtt_layer.publisher import MqttPublisher
     from mqtt_layer.subscriber import MqttCommandSubscriber
@@ -180,7 +180,11 @@ def run_real_mode(
                     broker_port=broker_port,
                 )
                 publisher = MqttPublisher(client)
-                subscriber = MqttCommandSubscriber(client, CommandHandler(bike))
+                subscriber = MqttCommandSubscriber(
+                    client,
+                    CommandHandler(bike),
+                    merged_sensor_handler=_print_merged_sensor_output,
+                )
                 client.loop_start()
                 subscriber.start()
                 bike.set_command_feedback_enabled(True)
@@ -218,7 +222,11 @@ def run_real_mode(
             mqtt_host = broker_host or MQTT_BROKER_HOST
             mqtt_port = broker_port if broker_port is not None else MQTT_BROKER_PORT
             print(f"MQTT broker: {mqtt_host}:{mqtt_port}")
-            print(f"Publishing real sensor JSON to MQTT topic: {topic}")
+            print(f"Publishing RAW real sensor JSON to MQTT topic: {topic}")
+            print(
+                "Receiving backend merged sensor JSON from MQTT topic: "
+                f"{MERGED_SENSORS_TOPIC}"
+            )
             print("Receiving backend feedback commands for buzzer/LCD.")
         elif mqtt_enabled:
             print("MQTT unavailable; real sensor JSON will only print locally.")
@@ -232,7 +240,11 @@ def run_real_mode(
             status_line = bike.get_latest_status_line()
             if status_line:
                 print(status_line, flush=True)
-            print(message_to_json(message), flush=True)
+            raw_json = message_to_json(message)
+            if publisher is not None:
+                print(f"RAW sensor JSON: {raw_json}", flush=True)
+            else:
+                print(raw_json, flush=True)
             if not validate_sensor_message(message):
                 print("Warning: real sensor message failed schema validation.")
             if publisher is not None:
@@ -253,6 +265,13 @@ def run_real_mode(
                 print(f"MQTT cleanup failed: {exc}")
         bike.cleanup()
         print("Real GrovePi bike mode stopped.")
+
+
+def _print_merged_sensor_output(payload: bytes) -> None:
+    """Print backend-processed sensor JSON received from MQTT."""
+    payload_text = payload.decode("utf-8", errors="replace")
+    print(f"MERGED sensor JSON: {payload_text}", flush=True)
+
 
 def run_self_test(reading_count: int = 10) -> None:
     """Run a short deterministic simulation and validate each message."""
@@ -529,7 +548,12 @@ def run_backend_feedback_self_test(decision: DecisionResult) -> None:
     """Run simple feedback-command checks without a real MQTT broker."""
     from backend_layer.backend_service import build_feedback_command
     from backend_layer.mqtt_receiver import MqttBackendReceiver
-    from config_layer.mqtt_topics import COMMAND_TOPIC, SENSOR_TOPIC, STATUS_TOPIC
+    from config_layer.mqtt_topics import (
+        COMMAND_TOPIC,
+        MERGED_SENSORS_TOPIC,
+        SENSOR_TOPIC,
+        STATUS_TOPIC,
+    )
     from mqtt_layer.command_handler import CommandHandler
 
     feedback_command = build_feedback_command(decision)
@@ -552,14 +576,14 @@ def run_backend_feedback_self_test(decision: DecisionResult) -> None:
     receiver.publisher = fake_publisher
 
     receiver._on_message(None, None, _FakeMqttMessage(SENSOR_TOPIC, b"{}"))
-    if fake_publisher.publish_count != 1:
-        raise RuntimeError("Sensor message did not publish one feedback command.")
-    if fake_publisher.last_topic != COMMAND_TOPIC:
+    if fake_publisher.publish_count != 2:
+        raise RuntimeError("Sensor message did not publish merged data and feedback.")
+    if fake_publisher.published_topics != [MERGED_SENSORS_TOPIC, COMMAND_TOPIC]:
         raise RuntimeError("Feedback command was published to the wrong topic.")
 
     receiver._on_message(None, None, _FakeMqttMessage(COMMAND_TOPIC, b"{}"))
     receiver._on_message(None, None, _FakeMqttMessage(STATUS_TOPIC, b"{}"))
-    if fake_publisher.publish_count != 1:
+    if fake_publisher.publish_count != 2:
         raise RuntimeError("Command/status message published unexpected feedback.")
 
 
@@ -574,6 +598,14 @@ class _FakeBackendService:
     ) -> dict[str, Any]:
         return self.feedback_command
 
+    def get_latest_merged_sensor_message(self) -> dict[str, Any]:
+        return make_test_sensor_message(
+            workout_type="cadence",
+            cadence_rpm=50,
+            speed_kmh=20,
+            heart_rate_bpm=120,
+        )
+
     def handle_command_message(self, payload: bytes) -> None:
         return None
 
@@ -586,11 +618,13 @@ class _FakePublisher:
         self.publish_count = 0
         self.last_topic: str | None = None
         self.last_payload: dict[str, Any] | None = None
+        self.published_topics: list[str] = []
 
     def publish_json(self, topic: str, payload: dict[str, Any]) -> bool:
         self.publish_count += 1
         self.last_topic = topic
         self.last_payload = payload
+        self.published_topics.append(topic)
         return True
 
 
