@@ -36,10 +36,14 @@ class CommandHandler:
         self._pending_command = None  # type: dict[str, Any] | None
         self._lock = Lock()
 
-    def handle_command(self, payload: str | bytes | dict[str, Any]) -> dict[str, Any]:
+    def handle_command(
+        self,
+        payload: str | bytes | bytearray | dict[str, Any],
+    ) -> dict[str, Any]:
         """Handle a command payload and return a command result dictionary."""
-        command_data = self._parse_payload(payload)
-        if command_data is None:
+        try:
+            command_data = parse_command_payload(payload)
+        except ValueError:
             return {
                 "ok": False,
                 "command": "INVALID",
@@ -187,22 +191,6 @@ class CommandHandler:
             buzzer_pulse_ms=command_data.get("buzzer_pulse_ms"),
             buzzer_pulse_reason=command_data.get("buzzer_pulse_reason"),
         )
-
-    def _parse_payload(self, payload: str | bytes | dict[str, Any]) -> dict[str, Any] | None:
-        if isinstance(payload, dict):
-            return payload
-
-        if isinstance(payload, bytes):
-            payload = payload.decode("utf-8")
-
-        if isinstance(payload, str):
-            try:
-                parsed = json.loads(payload)
-            except json.JSONDecodeError:
-                return None
-            return parsed if isinstance(parsed, dict) else None
-
-        return None
 
     def _apply_feedback(self, command_data: dict[str, Any]) -> None:
         display_active = command_data.get("display_active")
@@ -412,3 +400,27 @@ def _coerce_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def parse_command_payload(
+    payload: str | bytes | bytearray | dict[str, Any],
+) -> dict[str, Any]:
+    """Parse one MQTT command payload into a dictionary."""
+    if isinstance(payload, dict):
+        return payload
+
+    if isinstance(payload, (bytes, bytearray)):
+        try:
+            payload = bytes(payload).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Command payload bytes must be UTF-8 JSON") from exc
+
+    if isinstance(payload, str):
+        try:
+            parsed = json.loads(payload.strip())
+        except json.JSONDecodeError as exc:
+            raise ValueError("Command payload string must be valid JSON") from exc
+        if isinstance(parsed, dict):
+            return parsed
+
+    raise ValueError("Command payload must be valid JSON or a dictionary")
