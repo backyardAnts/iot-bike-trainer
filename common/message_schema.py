@@ -37,6 +37,9 @@ REAL_SENSOR_MESSAGE_KEYS = REQUIRED_SENSOR_MESSAGE_KEYS + (
     "buzzer_state",
     "led_state",
 )
+OPTIONAL_SENSOR_MESSAGE_KEYS = (
+    "mode",
+)
 
 LEGACY_SENSOR_MESSAGE_KEYS = tuple(
     key for key in REQUIRED_SENSOR_MESSAGE_KEYS if key != "workout_type"
@@ -101,10 +104,15 @@ def validate_sensor_message(message: Dict[str, Any]) -> bool:
 
     message_keys = set(message.keys())
     has_workout_type = "workout_type" in message
-    if message_keys not in (
+    valid_key_sets = (
         set(REQUIRED_SENSOR_MESSAGE_KEYS),
         set(REAL_SENSOR_MESSAGE_KEYS),
         set(LEGACY_SENSOR_MESSAGE_KEYS),
+    )
+    optional_keys = set(OPTIONAL_SENSOR_MESSAGE_KEYS)
+    if not any(
+        message_keys == valid_keys or message_keys == valid_keys | optional_keys
+        for valid_keys in valid_key_sets
     ):
         return False
 

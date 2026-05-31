@@ -50,14 +50,23 @@ class RealBike(object):
         temperature_debug: bool = False,
         command_feedback_enabled: bool = False,
         command_timeout_seconds: float = 3.0,
+        defer_session_creation: bool = False,
     ) -> None:
         self.device_id = str(device_id)
         self.workout_type = self._normalize_workout_type(workout_type)
-        self.session_id = (
-            str(session_id)
-            if session_id is not None
-            else get_next_session_id(session_counter_file)
-        )
+        self._session_counter_file = session_counter_file
+        self._fixed_session_id = session_id is not None
+        self._defer_session_creation = bool(defer_session_creation)
+        if session_id is not None:
+            self.session_id = str(session_id)
+        elif self._defer_session_creation:
+            self.session_id = ""
+        else:
+            self.session_id = get_next_session_id(session_counter_file)
+        self.workout_active = bool(self.session_id and not self._defer_session_creation)
+        self.session_active = self.workout_active
+        self.mode = "real"
+        self.athlete = {}  # type: Dict[str, Any]
         self.heart_rate_bpm = int(heart_rate_bpm)
         self.enable_hall = bool(enable_hall)
         self.hall_debug = bool(hall_debug)
@@ -150,12 +159,80 @@ class RealBike(object):
             led_state=False,
         )
         self._latest_message["speed_kmh"] = round(float(speed_kmh), 2)
+        self._latest_message["mode"] = getattr(self, "mode", "real")
         self._latest_humidity_percent = humidity_percent
         return self._latest_message
 
     def set_command_feedback_enabled(self, enabled: bool) -> None:
         """Enable or disable backend command feedback mode."""
         self.command_feedback_enabled = bool(enabled)
+
+    def set_workout_type(self, workout_type: str) -> None:
+        """Change the workout type used in future sensor messages."""
+        self.workout_type = self._normalize_workout_type(workout_type)
+
+    def set_mode(self, mode: str) -> None:
+        """Store the current dashboard-selected bike mode."""
+        mode_text = str(mode).strip()
+        if mode_text:
+            self.mode = mode_text
+
+    def start_workout(
+        self,
+        session_id: Optional[str] = None,
+        workout_type: Optional[str] = None,
+        mode: Optional[str] = None,
+        athlete: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Create or resume the current real workout session."""
+        self.start_session(
+            session_id=session_id,
+            workout_type=workout_type,
+            mode=mode,
+            athlete=athlete,
+        )
+
+    def start_session(
+        self,
+        session_id: Optional[str] = None,
+        workout_type: Optional[str] = None,
+        mode: Optional[str] = None,
+        athlete: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Mark the real bike workout as active, creating a session ID if needed."""
+        if workout_type:
+            self.set_workout_type(workout_type)
+        if mode:
+            self.set_mode(mode)
+        self.athlete = dict(athlete) if isinstance(athlete, dict) else {}
+
+        requested_session_id = _clean_optional_text(session_id)
+        if requested_session_id is not None:
+            self.session_id = requested_session_id
+            self._fixed_session_id = True
+        elif not self.workout_active:
+            if not self._fixed_session_id or not self.session_id:
+                self.session_id = get_next_session_id(self._session_counter_file)
+
+        self.workout_active = True
+        self.session_active = True
+
+    def stop_workout(self) -> None:
+        """Mark the current real workout as inactive."""
+        self.stop_session()
+
+    def stop_session(self) -> None:
+        """Stop publishing readings for the current workout session."""
+        self.workout_active = False
+        self.session_active = False
+
+    def is_session_active(self) -> bool:
+        """Return whether the real workout is currently active."""
+        return self.workout_active
+
+    def test_buzzer(self, duration_seconds: float = 0.2) -> None:
+        """Pulse the buzzer once for command-driven hardware testing."""
+        self.buzzer.beep(float(duration_seconds))
 
     def apply_physical_feedback_command(self, command_data: Dict[str, Any]) -> None:
         """Apply an AI/backend feedback command to buzzer and LCD hardware."""
@@ -533,3 +610,10 @@ def _coerce_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _clean_optional_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None

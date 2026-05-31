@@ -40,6 +40,21 @@ CREATE TABLE IF NOT EXISTS sessions (
     status TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS session_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL UNIQUE,
+    device_id TEXT,
+    workout_type TEXT,
+    mode TEXT,
+    athlete_name TEXT,
+    athlete_age INTEGER,
+    athlete_weight_kg REAL,
+    athlete_height_cm REAL,
+    athlete_email TEXT,
+    athlete_json TEXT,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -121,6 +136,9 @@ ON mqtt_status_messages(received_at);
 
 CREATE INDEX IF NOT EXISTS idx_sessions_status
 ON sessions(status);
+
+CREATE INDEX IF NOT EXISTS idx_session_metadata_email
+ON session_metadata(athlete_email);
 
 CREATE INDEX IF NOT EXISTS idx_decision_logs_created_at
 ON decision_logs(created_at);

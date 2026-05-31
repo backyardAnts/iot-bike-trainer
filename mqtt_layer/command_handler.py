@@ -18,6 +18,10 @@ SUPPORTED_COMMANDS = {
     "CLEAR_FEEDBACK",
     "START_SESSION",
     "STOP_SESSION",
+    "START_WORKOUT",
+    "STOP_WORKOUT",
+    "TEST_BUZZER",
+    "CHANGE_MODE",
     "SET_DISTANCE_THRESHOLD",
     "SET_HEART_RATE_LIMIT",
 }
@@ -43,6 +47,14 @@ class CommandHandler:
             }
 
         command = str(command_data.get("command", "")).strip().upper()
+        if not self._is_for_this_device(command_data):
+            return self._result(
+                True,
+                command or "UNKNOWN",
+                "Command ignored for another device",
+                status="ignored",
+                device_id=command_data.get("device_id"),
+            )
         if self.defer_application:
             return self._queue_command(command, command_data)
 
@@ -121,13 +133,17 @@ class CommandHandler:
             self.bike.clear_feedback()
             return self._result(True, command, "Rider feedback cleared")
 
-        if command == "START_SESSION":
-            self._start_session()
-            return self._result(True, command, "Session started")
+        if command in {"START_SESSION", "START_WORKOUT"}:
+            return self._start_workout(command, command_data)
 
-        if command == "STOP_SESSION":
-            self._stop_session()
-            return self._result(True, command, "Session stopped")
+        if command in {"STOP_SESSION", "STOP_WORKOUT"}:
+            return self._stop_workout(command)
+
+        if command == "TEST_BUZZER":
+            return self._test_buzzer(command, command_data)
+
+        if command == "CHANGE_MODE":
+            return self._change_mode(command, command_data)
 
         if command == "SET_DISTANCE_THRESHOLD":
             return self._result(
@@ -232,17 +248,146 @@ class CommandHandler:
         }
         return any(key in command_data for key in physical_keys)
 
-    def _start_session(self) -> None:
-        if hasattr(self.bike, "start_session"):
-            self.bike.start_session()
-        else:
-            self.bike.session_active = True
+    def _is_for_this_device(self, command_data: dict[str, Any]) -> bool:
+        command_device_id = command_data.get("device_id")
+        if command_device_id is None or str(command_device_id).strip() == "":
+            return True
 
-    def _stop_session(self) -> None:
-        if hasattr(self.bike, "stop_session"):
+        bike_device_id = getattr(self.bike, "device_id", None)
+        if bike_device_id is None:
+            return True
+        return str(command_device_id).strip() == str(bike_device_id)
+
+    def _start_workout(
+        self,
+        command: str,
+        command_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        if self._is_workout_active():
+            return self._result(
+                True,
+                command,
+                "Workout is already active",
+                status="already_active",
+                session_id=getattr(self.bike, "session_id", ""),
+                workout_type=getattr(self.bike, "workout_type", None),
+                mode=getattr(self.bike, "mode", command_data.get("mode")),
+                athlete=getattr(self.bike, "athlete", {}),
+                workout_active=True,
+            )
+
+        try:
+            if hasattr(self.bike, "start_workout"):
+                self.bike.start_workout(
+                    session_id=command_data.get("session_id"),
+                    workout_type=command_data.get("workout_type"),
+                    mode=command_data.get("mode"),
+                    athlete=command_data.get("athlete"),
+                )
+            elif hasattr(self.bike, "start_session"):
+                self.bike.start_session()
+            else:
+                self.bike.session_active = True
+        except ValueError as exc:
+            return self._result(False, command, str(exc), status="invalid")
+
+        return self._result(
+            True,
+            command,
+            "Workout started",
+            status="started",
+            session_id=getattr(self.bike, "session_id", ""),
+            workout_type=getattr(
+                self.bike,
+                "workout_type",
+                command_data.get("workout_type"),
+            ),
+            mode=getattr(self.bike, "mode", command_data.get("mode")),
+            athlete=getattr(self.bike, "athlete", command_data.get("athlete", {})),
+            workout_active=True,
+        )
+
+    def _stop_workout(self, command: str) -> dict[str, Any]:
+        if not self._is_workout_active():
+            return self._result(
+                True,
+                command,
+                "No active workout to stop",
+                status="idle",
+                session_id=getattr(self.bike, "session_id", ""),
+                workout_type=getattr(self.bike, "workout_type", None),
+                mode=getattr(self.bike, "mode", None),
+                athlete=getattr(self.bike, "athlete", {}),
+                workout_active=False,
+            )
+
+        if hasattr(self.bike, "stop_workout"):
+            self.bike.stop_workout()
+        elif hasattr(self.bike, "stop_session"):
             self.bike.stop_session()
         else:
             self.bike.session_active = False
+
+        return self._result(
+            True,
+            command,
+            "Workout stopped",
+            status="stopped",
+            session_id=getattr(self.bike, "session_id", ""),
+            workout_type=getattr(self.bike, "workout_type", None),
+            mode=getattr(self.bike, "mode", None),
+            athlete=getattr(self.bike, "athlete", {}),
+            workout_active=False,
+        )
+
+    def _test_buzzer(
+        self,
+        command: str,
+        command_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        duration_seconds = _coerce_float(command_data.get("duration_seconds"), 0.2)
+        if hasattr(self.bike, "test_buzzer"):
+            self.bike.test_buzzer(duration_seconds)
+        elif hasattr(self.bike, "buzzer"):
+            self.bike.buzzer.beep(duration_seconds)
+        return self._result(
+            True,
+            command,
+            "Buzzer test complete",
+            status="buzzer_tested",
+        )
+
+    def _change_mode(
+        self,
+        command: str,
+        command_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        mode = str(command_data.get("mode", "")).strip()
+        if not mode:
+            return self._result(False, command, "Missing mode", status="invalid")
+
+        if hasattr(self.bike, "set_mode"):
+            self.bike.set_mode(mode)
+        else:
+            setattr(self.bike, "mode", mode)
+
+        return self._result(
+            True,
+            command,
+            "Mode changed",
+            status="mode_changed",
+            mode=getattr(self.bike, "mode", mode),
+            session_id=getattr(self.bike, "session_id", ""),
+            workout_type=getattr(self.bike, "workout_type", None),
+            workout_active=self._is_workout_active(),
+        )
+
+    def _is_workout_active(self) -> bool:
+        if hasattr(self.bike, "is_session_active"):
+            return bool(self.bike.is_session_active())
+        if hasattr(self.bike, "workout_active"):
+            return bool(self.bike.workout_active)
+        return bool(getattr(self.bike, "session_active", False))
 
     def _result(
         self,
@@ -258,3 +403,12 @@ class CommandHandler:
         }
         result.update(extra)
         return result
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    if isinstance(value, bool):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

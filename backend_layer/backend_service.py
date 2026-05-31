@@ -11,11 +11,13 @@ from ai_decision_layer.decision_engine import DecisionEngine
 from ai_decision_layer.decision_result import DecisionResult
 from common.message_schema import validate_sensor_message
 from common.time_utils import get_current_timestamp
+from config_layer.rider_profile import get_default_rider_profile
 from config_layer.settings import DEFAULT_SESSION_ID, DEVICE_ID
 from database_layer.sqlite_storage import (
     save_command,
     save_decision_log,
     save_sensor_reading,
+    save_session_metadata,
     save_status_message,
     start_session,
     stop_session,
@@ -35,11 +37,13 @@ class BackendService:
         heart_rate_timeout_seconds: float = DEFAULT_HEART_RATE_TIMEOUT_SECONDS,
         monotonic_clock: Any | None = None,
     ) -> None:
+        self._uses_default_decision_engine = decision_engine is None
         self.decision_engine = decision_engine or DecisionEngine()
         self.heart_rate_timeout_seconds = float(heart_rate_timeout_seconds)
         self._clock = monotonic_clock or time.monotonic
         self._latest_heart_rates = {}  # type: dict[tuple[str, str], dict[str, Any]]
         self._latest_merged_sensor_message = None  # type: dict[str, Any] | None
+        self._session_context = {}  # type: dict[tuple[str, str], dict[str, Any]]
 
     def handle_sensor_message(
         self,
@@ -142,6 +146,7 @@ class BackendService:
         status_message = _parse_json_object(payload_text)
         if status_message is None:
             return None
+        self._cache_session_context_from_status(status_message)
         session_payload = build_session_status_payload(status_message)
         if session_payload is None:
             return None
@@ -188,8 +193,10 @@ class BackendService:
         timestamp = str(session_payload["timestamp"])
         if session_payload["status"] == "active":
             start_session(session_id, str(session_payload["device_id"]), timestamp)
+            self._save_session_metadata_from_payload(session_payload)
             return
 
+        self._save_session_metadata_from_payload(session_payload)
         stop_session(session_id, timestamp)
 
     def _send_stopped_session_report(self, session_payload: dict[str, Any]) -> None:
@@ -202,7 +209,80 @@ class BackendService:
             )
 
     def _decide_feedback(self, message: dict[str, Any]) -> DecisionResult:
+        rider_profile = self._rider_profile_for_message(message)
+        if rider_profile is not None and (
+            self._uses_default_decision_engine
+            or isinstance(self.decision_engine, DecisionEngine)
+        ):
+            return DecisionEngine(rider_profile=rider_profile).analyze(message)
         return self.decision_engine.analyze(message)
+
+    def _cache_session_context_from_status(self, status_message: dict[str, Any]) -> None:
+        status = str(status_message.get("status", "")).strip().lower()
+        if status not in {"started", "stopped"}:
+            return
+
+        session_id = _non_empty_string(status_message.get("session_id"))
+        if session_id is None:
+            return
+
+        device_id = _non_empty_string(status_message.get("device_id")) or DEVICE_ID
+        athlete = _clean_athlete(status_message.get("athlete"))
+        context = dict(self._session_context.get((device_id, session_id), {}))
+        if athlete:
+            context["athlete"] = athlete
+        workout_type = _non_empty_string(status_message.get("workout_type"))
+        if workout_type:
+            context["workout_type"] = workout_type
+        mode = _non_empty_string(status_message.get("mode"))
+        if mode:
+            context["mode"] = mode
+        if context:
+            self._session_context[(device_id, session_id)] = context
+
+    def _rider_profile_for_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
+        key = (str(message["device_id"]), str(message["session_id"]))
+        context = self._session_context.get(key)
+        if not context:
+            return None
+
+        athlete = context.get("athlete")
+        if not isinstance(athlete, dict):
+            return None
+
+        age = _parse_positive_int(athlete.get("age"))
+        if age is None:
+            return None
+
+        rider_profile = get_default_rider_profile()
+        rider_profile["age"] = age
+        rider_profile["weight_kg"] = _parse_positive_float(
+            athlete.get("weight_kg"),
+            rider_profile.get("weight_kg", 75),
+        )
+        return rider_profile
+
+    def _save_session_metadata_from_payload(
+        self,
+        session_payload: dict[str, Any],
+    ) -> None:
+        athlete = session_payload.get("athlete")
+        if not isinstance(athlete, dict) or not athlete:
+            return
+
+        try:
+            save_session_metadata(
+                str(session_payload["session_id"]),
+                device_id=str(session_payload.get("device_id", "")),
+                workout_type=str(session_payload.get("workout_type", "")),
+                mode=str(session_payload.get("mode", "")),
+                athlete=athlete,
+            )
+        except Exception as exc:
+            print(
+                "Failed to save session athlete metadata for "
+                f"{session_payload.get('session_id')}: {exc}"
+            )
 
     def _merge_latest_heart_rate(self, message: dict[str, Any]) -> dict[str, Any]:
         key = (str(message["device_id"]), str(message["session_id"]))
@@ -244,6 +324,8 @@ def build_session_status_payload(
 ) -> dict[str, Any] | None:
     """Return a retained session-topic payload for started/stopped bike status."""
     status = str(status_message.get("status", "")).strip().lower()
+    if status == "ready":
+        return None
     if status not in {"started", "stopped"}:
         return None
 
@@ -262,13 +344,20 @@ def build_session_status_payload(
 
     timestamp = _non_empty_string(status_message.get("timestamp"))
     workout_type = _non_empty_string(status_message.get("workout_type")) or ""
-    return {
+    payload = {
         "device_id": device_id,
         "session_id": session_id,
         "workout_type": workout_type,
         "status": "active" if status == "started" else "stopped",
         "timestamp": timestamp or get_current_timestamp(),
     }
+    mode = _non_empty_string(status_message.get("mode"))
+    if mode:
+        payload["mode"] = mode
+    athlete = _clean_athlete(status_message.get("athlete"))
+    if athlete:
+        payload["athlete"] = athlete
+    return payload
 
 
 def _non_empty_string(value: Any) -> str | None:
@@ -277,6 +366,43 @@ def _non_empty_string(value: Any) -> str | None:
 
     text = str(value).strip()
     return text or None
+
+
+def _clean_athlete(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+
+    athlete = {}
+    for key in ("name", "email"):
+        text = _non_empty_string(value.get(key))
+        if text is not None:
+            athlete[key] = text
+
+    for key in ("age", "weight_kg", "height_cm"):
+        if key in value:
+            athlete[key] = value[key]
+
+    return athlete
+
+
+def _parse_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _parse_positive_float(value: Any, default: Any) -> float:
+    if isinstance(value, bool):
+        return float(default)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    return number if number > 0 else float(default)
 
 
 def parse_heart_rate_message(message: dict[str, Any]) -> dict[str, Any] | None:

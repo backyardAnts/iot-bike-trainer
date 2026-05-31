@@ -93,6 +93,67 @@ def save_command(payload: dict[str, Any] | str) -> None:
         )
 
 
+def save_session_metadata(
+    session_id: str,
+    device_id: str = "",
+    workout_type: str = "",
+    mode: str = "",
+    athlete: dict[str, Any] | None = None,
+) -> None:
+    """Store dashboard-provided athlete/session metadata for a workout session."""
+    session_id = str(session_id).strip()
+    if not session_id:
+        return
+
+    athlete_data = dict(athlete) if isinstance(athlete, dict) else {}
+    now = get_current_timestamp()
+    athlete_json = json.dumps(athlete_data, separators=(",", ":"), sort_keys=True)
+
+    with get_db_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO session_metadata (
+                session_id,
+                device_id,
+                workout_type,
+                mode,
+                athlete_name,
+                athlete_age,
+                athlete_weight_kg,
+                athlete_height_cm,
+                athlete_email,
+                athlete_json,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                device_id = excluded.device_id,
+                workout_type = excluded.workout_type,
+                mode = excluded.mode,
+                athlete_name = excluded.athlete_name,
+                athlete_age = excluded.athlete_age,
+                athlete_weight_kg = excluded.athlete_weight_kg,
+                athlete_height_cm = excluded.athlete_height_cm,
+                athlete_email = excluded.athlete_email,
+                athlete_json = excluded.athlete_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                session_id,
+                str(device_id),
+                str(workout_type),
+                str(mode),
+                _optional_text(athlete_data.get("name")),
+                _optional_int(athlete_data.get("age")),
+                _optional_float(athlete_data.get("weight_kg")),
+                _optional_float(athlete_data.get("height_cm")),
+                _optional_text(athlete_data.get("email")),
+                athlete_json,
+                now,
+            ),
+        )
+
+
 def save_decision_log(
     sensor_message: dict[str, Any],
     decision: Any,
@@ -346,3 +407,28 @@ def _parse_json_object(payload: str) -> dict[str, Any] | None:
         return None
 
     return parsed if isinstance(parsed, dict) else None
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

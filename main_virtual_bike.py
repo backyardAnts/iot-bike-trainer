@@ -170,6 +170,7 @@ def run_real_mode(
         temperature_debug=temperature_debug,
         command_feedback_enabled=mqtt_enabled,
         command_timeout_seconds=max(3.0, float(interval_seconds) * 3.0),
+        defer_session_creation=mqtt_enabled,
     )
     profile = get_training_profile(bike.workout_type)
     topic = sensor_topic or SENSOR_TOPIC
@@ -197,22 +198,18 @@ def run_real_mode(
                 client.loop_start()
                 subscriber.start()
                 bike.set_command_feedback_enabled(True)
-                publisher.publish_status(
-                    "started",
-                    {
-                        "device_id": bike.device_id,
-                        "session_id": bike.session_id,
-                        "workout_type": bike.workout_type,
-                        "mode": "real",
-                    },
-                )
+                _publish_real_status(publisher, "ready", bike, workout_active=False)
             except Exception as exc:
                 print(f"MQTT unavailable; continuing with local fallback: {exc}")
                 bike.set_command_feedback_enabled(False)
 
         print("Real GrovePi bike mode started. Press Ctrl+C to stop.")
-        print(f"Workout type: {profile['display_name']}")
-        print(f"Session ID: {bike.session_id}")
+        if mqtt_enabled:
+            print("Workout type: waiting for start_workout command")
+        else:
+            print(f"Workout type: {profile['display_name']}")
+        if bike.session_id:
+            print(f"Session ID: {bike.session_id}")
         active_hardware = ["ultrasonic D5/D6", "buzzer D7"]
         if lcd_enabled:
             active_hardware.append("LCD I2C")
@@ -231,21 +228,27 @@ def run_real_mode(
             mqtt_host = broker_host or MQTT_BROKER_HOST
             mqtt_port = broker_port if broker_port is not None else MQTT_BROKER_PORT
             print(f"MQTT broker: {mqtt_host}:{mqtt_port}")
-            print(f"Publishing RAW real sensor JSON to MQTT topic: {topic}")
+            print(f"RAW real sensor JSON will publish to MQTT topic: {topic}")
             print(
                 "Receiving backend merged sensor JSON from MQTT topic: "
                 f"{MERGED_SENSORS_TOPIC}"
             )
-            print("Receiving backend feedback commands for buzzer/LCD.")
+            print("Receiving backend feedback and dashboard commands.")
+            print("Real bike ready. Waiting for start_workout command...")
         elif mqtt_enabled:
-            print("MQTT unavailable; real sensor JSON will only print locally.")
+            print("MQTT unavailable; waiting without publishing sensor JSON.")
 
         bike.show_startup_lcd_message()
         if lcd_enabled:
             time.sleep(2.0)
 
         while True:
-            _apply_pending_real_command(command_handler)
+            command_result = _apply_pending_real_command(command_handler)
+            _handle_real_command_result(command_result, publisher, bike)
+            if mqtt_enabled and not _is_real_workout_active(bike):
+                bike.wait_between_updates(_real_idle_wait_seconds(interval_seconds))
+                continue
+
             message = bike.update()
             status_line = bike.get_latest_status_line()
             if status_line:
@@ -259,21 +262,14 @@ def run_real_mode(
                 print("Warning: real sensor message failed schema validation.")
             if publisher is not None:
                 publisher.publish_json(topic, message)
-            _apply_pending_real_command(command_handler)
+            command_result = _apply_pending_real_command(command_handler)
+            _handle_real_command_result(command_result, publisher, bike)
             bike.wait_between_updates(interval_seconds)
     except KeyboardInterrupt:
         print("\nReal GrovePi bike mode stopping.")
     finally:
-        if publisher is not None:
-            publisher.publish_status(
-                "stopped",
-                {
-                    "device_id": bike.device_id,
-                    "session_id": bike.session_id,
-                    "workout_type": bike.workout_type,
-                    "mode": "real",
-                },
-            )
+        if publisher is not None and _is_real_workout_active(bike):
+            _publish_real_status(publisher, "stopped", bike, workout_active=False)
         if subscriber is not None:
             subscriber.stop()
         if client is not None:
@@ -286,16 +282,106 @@ def run_real_mode(
         print("Real GrovePi bike mode stopped.")
 
 
-def _apply_pending_real_command(command_handler: Any | None) -> None:
+def _apply_pending_real_command(command_handler: Any | None) -> dict[str, Any] | None:
     """Apply one queued real-bike MQTT command on the main hardware loop."""
     if command_handler is None:
-        return
+        return None
     if not hasattr(command_handler, "apply_latest_command"):
-        return
+        return None
 
     result = command_handler.apply_latest_command()
     if result is not None:
         print(f"Command result: {result}", flush=True)
+    return result
+
+
+def _handle_real_command_result(
+    result: dict[str, Any] | None,
+    publisher: Any | None,
+    bike: Any,
+) -> None:
+    """Publish real-bike service status transitions caused by dashboard commands."""
+    if result is None:
+        return
+
+    status = str(result.get("status", "")).strip().lower()
+    if not status or status == "queued":
+        return
+
+    if status == "started":
+        profile = get_training_profile(bike.workout_type)
+        print(
+            "Workout started: "
+            f"{bike.session_id} ({profile['display_name']}, mode={bike.mode})",
+            flush=True,
+        )
+        _publish_real_status(publisher, "started", bike, workout_active=True)
+        return
+
+    if status == "stopped":
+        print(f"Workout stopped: {bike.session_id}", flush=True)
+        _publish_real_status(publisher, "stopped", bike, workout_active=False)
+        print("Real bike ready. Waiting for start_workout command...", flush=True)
+        return
+
+    if status == "already_active":
+        print(f"Workout already active: {bike.session_id}", flush=True)
+        _publish_real_status(publisher, "already_active", bike, workout_active=True)
+        return
+
+    if status == "idle":
+        print("No active workout to stop.", flush=True)
+        _publish_real_status(publisher, "idle", bike, workout_active=False)
+        return
+
+    if status in {"buzzer_tested", "mode_changed", "ignored", "invalid"}:
+        _publish_real_status(
+            publisher,
+            status,
+            bike,
+            workout_active=_is_real_workout_active(bike),
+        )
+
+
+def _publish_real_status(
+    publisher: Any | None,
+    status: str,
+    bike: Any,
+    workout_active: bool,
+) -> None:
+    if publisher is None:
+        return
+
+    payload = {
+        "device_id": getattr(bike, "device_id", ""),
+        "workout_active": bool(workout_active),
+        "mode": getattr(bike, "mode", "real"),
+    }
+    session_id = str(getattr(bike, "session_id", "")).strip()
+    if session_id:
+        payload["session_id"] = session_id
+    workout_type = str(getattr(bike, "workout_type", "")).strip()
+    if workout_type and (workout_active or status in {"started", "stopped"}):
+        payload["workout_type"] = workout_type
+    athlete = getattr(bike, "athlete", {})
+    if isinstance(athlete, dict) and athlete:
+        payload["athlete"] = dict(athlete)
+
+    publisher.publish_status(status, payload)
+
+
+def _is_real_workout_active(bike: Any) -> bool:
+    if hasattr(bike, "is_session_active"):
+        return bool(bike.is_session_active())
+    return bool(getattr(bike, "workout_active", False))
+
+
+def _real_idle_wait_seconds(interval_seconds: float) -> float:
+    try:
+        interval = float(interval_seconds)
+    except (TypeError, ValueError):
+        interval = DEFAULT_SAMPLE_INTERVAL_SECONDS
+    return min(max(interval, 0.2), 1.0)
 
 
 def _print_merged_sensor_output(payload: bytes) -> None:
