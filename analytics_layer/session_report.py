@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+import inspect
 from statistics import mean
 from typing import Any
 
 from analytics_layer.email_sender import send_session_report_email
+from analytics_layer.session_report_email_template import (
+    build_session_report_email_content,
+    format_session_report_text_email,
+)
 from database_layer.db_connection import get_db_connection
 from database_layer.sqlite_storage import (
     get_session_report_email_record,
@@ -54,7 +59,9 @@ def process_stopped_session_report(
 
     report = generate_session_report(session_id, stopped_status=session_payload)
     subject = build_session_report_subject(report)
-    body = format_session_report_email(report)
+    email_content = build_session_report_email_content(report)
+    body = email_content["text_body"]
+    html_body = email_content["html_body"]
 
     if not reserve_session_report_email(
         session_id,
@@ -74,7 +81,12 @@ def process_stopped_session_report(
         print(f"Failed to save session analytics for {session_id}: {exc}")
 
     try:
-        email_result = email_sender(subject, body)
+        email_result = _send_report_email(
+            email_sender,
+            subject,
+            body,
+            html_body,
+        )
     except Exception as exc:
         email_result = {
             "status": "failed",
@@ -120,62 +132,46 @@ def build_session_report_subject(report: dict[str, Any]) -> str:
 
 def format_session_report_email(report: dict[str, Any]) -> str:
     """Return a readable plain-text workout report."""
-    info = report["session_info"]
-    performance = report["performance"]
-    safety = report["safety"]
-    feedback = report["feedback"]
-    comparison = report["comparison"]
+    return format_session_report_text_email(report)
 
-    return "\n".join(
-        [
-            "Bike Workout Summary",
-            "",
-            "Session",
-            f"- Session ID: {info['session_id']}",
-            f"- Device: {info['device_id']}",
-            f"- Workout type: {info['workout_type'] or 'unknown'}",
-            f"- Start: {info['start_timestamp'] or 'unknown'}",
-            f"- End: {info['end_timestamp'] or 'unknown'}",
-            f"- Duration: {info['duration']}",
-            f"- Sensor readings: {info['total_sensor_readings']}",
-            "",
-            "Performance",
-            f"- Top speed: {performance['top_speed_kmh']} km/h",
-            f"- Average speed: {performance['avg_speed_kmh']} km/h",
-            f"- Estimated distance: {performance['estimated_distance_km']} km",
-            f"- Top cadence: {performance['top_cadence_rpm']} rpm",
-            f"- Average cadence: {performance['avg_cadence_rpm']} rpm",
-            f"- Top heart rate: {performance['top_heart_rate_bpm']} bpm",
-            f"- Average heart rate: {performance['avg_heart_rate_bpm']} bpm",
-            "",
-            "Safety",
-            f"- Left warnings: {safety['left_warnings']}",
-            f"- Right warnings: {safety['right_warnings']}",
-            f"- Both-side warnings: {safety['both_warnings']}",
-            f"- Total safety warnings: {safety['total_safety_warnings']}",
-            f"- Danger warnings: {safety['danger_warnings']}",
-            f"- High-HR workout warnings: {safety['high_hr_workout_warnings']}",
-            "",
-            "AI Feedback",
-            f"- Most common action: {feedback['most_common_recommended_action']}",
-            f"- Recover now: {feedback['recover_count']}",
-            f"- Reduce speed: {feedback['reduce_speed_count']}",
-            f"- Slow cadence: {feedback['slow_cadence_count']}",
-            f"- Reduce effort: {feedback['reduce_effort_count']}",
-            f"- Increase speed: {feedback['increase_speed_count']}",
-            f"- Pedal faster: {feedback['pedal_faster_count']}",
-            f"- Keep cadence: {feedback['keep_cadence_count']}",
-            f"- Maintain pace: {feedback['maintain_pace_count']}",
-            "",
-            "Comparison",
-            f"- {comparison['summary']}",
-            _format_comparison_line("Previous", comparison["previous_session"]),
-            _format_comparison_line("Average previous", comparison["previous_average"]),
-            _format_comparison_line("Best previous", comparison["best_session"]),
-            "",
-            "Heart-rate data is for training feedback only and is not a medical diagnosis.",
-        ]
+
+def _send_report_email(
+    email_sender: Any,
+    subject: str,
+    body: str,
+    html_body: str,
+) -> dict[str, Any]:
+    """Send a report while preserving compatibility with two-argument senders."""
+    try:
+        signature = inspect.signature(email_sender)
+    except (TypeError, ValueError):
+        return email_sender(subject, body, html_body)
+
+    parameters = signature.parameters.values()
+    if any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+        return email_sender(subject, body, html_body)
+
+    parameters = signature.parameters.values()
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+        return email_sender(subject, body, html_body=html_body)
+
+    parameters_by_name = signature.parameters
+    if "html_body" in parameters_by_name:
+        return email_sender(subject, body, html_body=html_body)
+
+    positional_count = sum(
+        1
+        for parameter in parameters_by_name.values()
+        if parameter.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
     )
+    if positional_count >= 3:
+        return email_sender(subject, body, html_body)
+
+    return email_sender(subject, body)
 
 
 def _calculate_session_metrics(
@@ -362,10 +358,51 @@ def _calculate_feedback(decisions: list[dict[str, Any]]) -> dict[str, Any]:
     feedback = {
         "most_common_recommended_action": most_common[0][0] if most_common else "none",
         "action_counts": dict(action_counts),
+        "notable_decisions": _select_notable_decisions(decisions),
     }
     for action in TRACKED_FEEDBACK_ACTIONS:
         feedback[f"{action}_count"] = int(action_counts.get(action, 0))
     return feedback
+
+
+def _select_notable_decisions(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return a compact set of DecisionEngine outputs for the email report."""
+    notable = []
+    routine_actions = {
+        "",
+        "none",
+        "keep_cadence",
+        "maintain_pace",
+        "maintain_speed",
+    }
+    for decision in decisions:
+        alert_level = str(decision.get("alert_level", "")).strip().lower()
+        recommended_action = (
+            str(decision.get("recommended_action", "")).strip().lower()
+        )
+        display_message = str(decision.get("display_message", "")).strip()
+        if not recommended_action and not display_message:
+            continue
+        if alert_level not in {"warning", "danger"} and recommended_action in routine_actions:
+            continue
+        notable.append(_compact_decision(decision))
+
+    if not notable and decisions:
+        notable = [_compact_decision(decision) for decision in decisions[-3:]]
+
+    return notable[-5:]
+
+
+def _compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "timestamp": str(decision.get("timestamp", "")),
+        "decision_type": str(decision.get("decision_type", "")),
+        "alert_level": str(decision.get("alert_level", "normal")),
+        "alert_side": str(decision.get("alert_side", "none")),
+        "display_message": str(decision.get("display_message", "")),
+        "speaker_message": str(decision.get("speaker_message", "")),
+        "recommended_action": str(decision.get("recommended_action", "none")),
+    }
 
 
 def _build_same_workout_comparison(current: dict[str, Any]) -> dict[str, Any]:

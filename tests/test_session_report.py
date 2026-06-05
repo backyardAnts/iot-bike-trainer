@@ -17,6 +17,9 @@ from analytics_layer.session_report import (
     generate_session_report,
     process_stopped_session_report,
 )
+from analytics_layer.session_report_email_template import (
+    build_session_report_email_content,
+)
 from backend_layer.backend_service import BackendService
 from config_layer.mqtt_topics import STATUS_TOPIC
 from database_layer import sqlite_storage
@@ -249,6 +252,106 @@ class SessionReportTest(unittest.TestCase):
                 """
             ).fetchone()["count"]
         self.assertEqual(report_count, 1)
+
+    def test_session_report_email_content_includes_html_dashboard(self) -> None:
+        self._insert_session(
+            "session_visual",
+            "cadence",
+            [
+                ("2026-05-26T10:00:00", 10.0, 70, 120, "keep_cadence"),
+                ("2026-05-26T10:00:10", 18.0, 82, 145, "pedal_faster"),
+                ("2026-05-26T10:00:20", 22.0, 90, 175, "recover", "warning"),
+            ],
+        )
+
+        report = generate_session_report(
+            "session_visual",
+            stopped_status={
+                "session_id": "session_visual",
+                "device_id": "bike_001",
+                "workout_type": "cadence",
+                "timestamp": "2026-05-26T10:00:30",
+            },
+        )
+        content = build_session_report_email_content(report)
+
+        self.assertIn("Bike Workout Summary", content["text_body"])
+        self.assertIn("<html", content["html_body"])
+        self.assertIn("IoT Bike Trainer", content["html_body"])
+        self.assertIn("Average speed", content["html_body"])
+        self.assertIn("Average cadence", content["html_body"])
+        self.assertIn("Average heart rate", content["html_body"])
+        self.assertIn("Max heart rate", content["html_body"])
+        self.assertIn("Estimated distance", content["html_body"])
+        self.assertIn("Safety &amp; Feedback", content["html_body"])
+        self.assertIn("Notable DecisionEngine outputs", content["html_body"])
+
+    def test_email_sender_receives_html_when_supported(self) -> None:
+        self._insert_session(
+            "session_html_sender",
+            "speed",
+            [("2026-05-26T10:00:00", 12.0, 75, 140, "maintain_speed")],
+        )
+        sent = {}
+
+        def fake_email_sender(
+            subject: str,
+            body: str,
+            html_body: str | None = None,
+        ) -> dict[str, object]:
+            sent["subject"] = subject
+            sent["body"] = body
+            sent["html_body"] = html_body
+            return {
+                "status": "sent",
+                "sent": True,
+                "email_to": "coach@example.com",
+                "error": "",
+            }
+
+        result = process_stopped_session_report(
+            {
+                "session_id": "session_html_sender",
+                "device_id": "bike_001",
+                "workout_type": "speed",
+                "timestamp": "2026-05-26T10:05:00",
+            },
+            email_sender=fake_email_sender,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertIn("Bike Workout Summary", str(sent["body"]))
+        self.assertIn("<html", str(sent["html_body"]))
+
+    def test_two_argument_email_sender_still_works(self) -> None:
+        self._insert_session(
+            "session_legacy_sender",
+            "cadence",
+            [("2026-05-26T10:00:00", 10.0, 70, 120, "keep_cadence")],
+        )
+        sent_subjects = []
+
+        def fake_email_sender(subject: str, body: str) -> dict[str, object]:
+            sent_subjects.append(subject)
+            return {
+                "status": "sent",
+                "sent": True,
+                "email_to": "coach@example.com",
+                "error": "",
+            }
+
+        result = process_stopped_session_report(
+            {
+                "session_id": "session_legacy_sender",
+                "device_id": "bike_001",
+                "workout_type": "cadence",
+                "timestamp": "2026-05-26T10:05:00",
+            },
+            email_sender=fake_email_sender,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(sent_subjects), 1)
 
     def test_email_disabled_skips_safely(self) -> None:
         self._insert_session(

@@ -10,7 +10,11 @@ from typing import Any
 from config_layer import settings  # noqa: F401  # Import loads .env when available.
 
 
-def send_session_report_email(subject: str, body: str) -> dict[str, Any]:
+def send_session_report_email(
+    subject: str,
+    body: str,
+    html_body: str | None = None,
+) -> dict[str, Any]:
     """Send a workout report email, or return a safe skipped/failed result."""
     if not _env_bool("EMAIL_ENABLED", False):
         print("EMAIL_ENABLED is false; generated workout report but skipped email send.")
@@ -53,6 +57,8 @@ def send_session_report_email(subject: str, body: str) -> dict[str, Any]:
     message["From"] = email_from
     message["To"] = email_to
     message.set_content(body)
+    if html_body:
+        message.add_alternative(html_body, subtype="html")
 
     try:
         with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as smtp:
