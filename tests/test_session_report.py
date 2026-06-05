@@ -175,6 +175,51 @@ class SessionReportTest(unittest.TestCase):
         self.assertEqual(previous["session_id"], "session_cadence_old")
         self.assertEqual(previous["top_speed_kmh_delta"], 10.0)
 
+    def test_comparison_uses_only_same_athlete_sessions(self) -> None:
+        athlete_a = sqlite_storage.create_athlete_account(
+            "Anthony",
+            email="anthony@example.com",
+            age=30,
+        )
+        athlete_b = sqlite_storage.create_athlete_account(
+            "Coach",
+            email="coach@example.com",
+            age=40,
+        )
+        self._insert_session(
+            "session_anthony_old",
+            "cadence",
+            [("2026-05-26T09:00:00", 10.0, 70, 120, "keep_cadence")],
+            athlete_id=athlete_a["id"],
+        )
+        self._insert_session(
+            "session_coach_old",
+            "cadence",
+            [("2026-05-26T09:10:00", 40.0, 95, 160, "maintain_speed")],
+            athlete_id=athlete_b["id"],
+        )
+        self._insert_session(
+            "session_anthony_new",
+            "cadence",
+            [("2026-05-26T09:20:00", 20.0, 80, 130, "keep_cadence")],
+            athlete_id=athlete_a["id"],
+        )
+
+        report = generate_session_report(
+            "session_anthony_new",
+            stopped_status={
+                "session_id": "session_anthony_new",
+                "device_id": "bike_001",
+                "workout_type": "cadence",
+                "timestamp": "2026-05-26T09:21:00",
+            },
+        )
+
+        previous = report["comparison"]["previous_session"]
+        self.assertEqual(report["athlete_id"], athlete_a["id"])
+        self.assertEqual(previous["session_id"], "session_anthony_old")
+        self.assertEqual(previous["top_speed_kmh_delta"], 10.0)
+
     def test_backend_stopped_status_triggers_email_report_processing(self) -> None:
         calls = []
         original_processor = backend_service_module.process_stopped_session_report
@@ -399,7 +444,15 @@ class SessionReportTest(unittest.TestCase):
         session_id: str,
         workout_type: str,
         readings: list[tuple[object, ...]],
+        athlete_id: int | None = None,
     ) -> None:
+        if readings:
+            sqlite_storage.start_session(
+                session_id,
+                "bike_001",
+                str(readings[0][0]),
+                athlete_id=athlete_id,
+            )
         for index, reading in enumerate(readings):
             timestamp = str(reading[0])
             speed_kmh = float(reading[1])

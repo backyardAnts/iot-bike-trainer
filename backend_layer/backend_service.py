@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import time
 from typing import Any
 
@@ -14,6 +15,8 @@ from common.time_utils import get_current_timestamp
 from config_layer.rider_profile import get_default_rider_profile
 from config_layer.settings import DEFAULT_SESSION_ID, DEVICE_ID
 from database_layer.sqlite_storage import (
+    get_athlete_by_id,
+    get_athlete_for_session,
     save_command,
     save_decision_log,
     save_sensor_reading,
@@ -179,25 +182,57 @@ class BackendService:
         session_id = str(command_payload.get("session_id", DEFAULT_SESSION_ID))
         device_id = str(command_payload.get("device_id", DEVICE_ID))
         start_time = str(command_payload.get("timestamp", get_current_timestamp()))
-        start_session(session_id, device_id, start_time)
+        athlete = _clean_athlete(command_payload.get("athlete"))
+        athlete_id = _parse_optional_int(
+            command_payload.get("athlete_id") or command_payload.get("user_id")
+        )
+        _call_start_session(
+            session_id,
+            device_id,
+            start_time,
+            athlete_id=athlete_id,
+            athlete=athlete,
+        )
+        if athlete:
+            self._save_session_metadata_from_payload(
+                {
+                    **command_payload,
+                    "session_id": session_id,
+                    "device_id": device_id,
+                    "athlete": athlete,
+                }
+            )
         print(f"Started session record: {session_id}")
 
     def _stop_session_from_command(self, command_payload: dict[str, Any]) -> None:
         session_id = str(command_payload.get("session_id", DEFAULT_SESSION_ID))
         end_time = str(command_payload.get("timestamp", get_current_timestamp()))
-        stop_session(session_id, end_time)
+        athlete_id = _parse_optional_int(
+            command_payload.get("athlete_id") or command_payload.get("user_id")
+        )
+        _call_stop_session(session_id, end_time, athlete_id=athlete_id)
         print(f"Stopped session record: {session_id}")
 
     def _update_session_record_from_status(self, session_payload: dict[str, Any]) -> None:
         session_id = str(session_payload["session_id"])
         timestamp = str(session_payload["timestamp"])
+        athlete = session_payload.get("athlete")
+        athlete_id = _parse_optional_int(
+            session_payload.get("athlete_id") or session_payload.get("user_id")
+        )
         if session_payload["status"] == "active":
-            start_session(session_id, str(session_payload["device_id"]), timestamp)
+            _call_start_session(
+                session_id,
+                str(session_payload["device_id"]),
+                timestamp,
+                athlete_id=athlete_id,
+                athlete=athlete if isinstance(athlete, dict) else None,
+            )
             self._save_session_metadata_from_payload(session_payload)
             return
 
         self._save_session_metadata_from_payload(session_payload)
-        stop_session(session_id, timestamp)
+        _call_stop_session(session_id, timestamp, athlete_id=athlete_id)
 
     def _send_stopped_session_report(self, session_payload: dict[str, Any]) -> None:
         try:
@@ -209,6 +244,12 @@ class BackendService:
             )
 
     def _decide_feedback(self, message: dict[str, Any]) -> DecisionResult:
+        if not self._uses_default_decision_engine and not isinstance(
+            self.decision_engine,
+            DecisionEngine,
+        ):
+            return self.decision_engine.analyze(message)
+
         rider_profile = self._rider_profile_for_message(message)
         if rider_profile is not None and (
             self._uses_default_decision_engine
@@ -229,6 +270,11 @@ class BackendService:
         device_id = _non_empty_string(status_message.get("device_id")) or DEVICE_ID
         athlete = _clean_athlete(status_message.get("athlete"))
         context = dict(self._session_context.get((device_id, session_id), {}))
+        athlete_id = _parse_optional_int(
+            status_message.get("athlete_id") or status_message.get("user_id")
+        )
+        if athlete_id is not None:
+            context["athlete_id"] = athlete_id
         if athlete:
             context["athlete"] = athlete
         workout_type = _non_empty_string(status_message.get("workout_type"))
@@ -243,23 +289,50 @@ class BackendService:
     def _rider_profile_for_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
         key = (str(message["device_id"]), str(message["session_id"]))
         context = self._session_context.get(key)
-        if not context:
-            return None
+        athlete = _athlete_from_context(context)
+        athlete_id = _parse_optional_int(
+            context.get("athlete_id") if context else message.get("athlete_id")
+        )
+        if athlete_id is not None:
+            stored_athlete = _safe_get_athlete_by_id(athlete_id)
+            if stored_athlete is not None:
+                athlete = {**stored_athlete, **athlete}
+        elif athlete:
+            stored_athlete = _load_stored_athlete_for_context(
+                message,
+                athlete,
+            )
+            if stored_athlete is not None:
+                athlete = {**stored_athlete, **athlete}
+        else:
+            stored_athlete = _safe_get_athlete_for_session(
+                str(message["session_id"]),
+                device_id=str(message["device_id"]),
+            )
+            if stored_athlete is not None:
+                athlete = stored_athlete
 
-        athlete = context.get("athlete")
-        if not isinstance(athlete, dict):
-            return None
-
-        age = _parse_positive_int(athlete.get("age"))
-        if age is None:
+        if not athlete:
             return None
 
         rider_profile = get_default_rider_profile()
-        rider_profile["age"] = age
+        age = _parse_positive_int(athlete.get("age"))
+        if age is not None:
+            rider_profile["age"] = age
         rider_profile["weight_kg"] = _parse_positive_float(
             athlete.get("weight_kg"),
             rider_profile.get("weight_kg", 75),
         )
+        height_cm = _parse_positive_float(athlete.get("height_cm"), 0)
+        if height_cm > 0:
+            rider_profile["height_cm"] = height_cm
+        max_heart_rate = _parse_positive_int(athlete.get("max_heart_rate"))
+        if max_heart_rate is not None:
+            rider_profile["max_heart_rate"] = max_heart_rate
+        for key in ("fitness_level", "training_goal", "gender"):
+            text = _non_empty_string(athlete.get(key))
+            if text is not None:
+                rider_profile[key] = text
         return rider_profile
 
     def _save_session_metadata_from_payload(
@@ -267,7 +340,10 @@ class BackendService:
         session_payload: dict[str, Any],
     ) -> None:
         athlete = session_payload.get("athlete")
-        if not isinstance(athlete, dict) or not athlete:
+        athlete_id = _parse_optional_int(
+            session_payload.get("athlete_id") or session_payload.get("user_id")
+        )
+        if (not isinstance(athlete, dict) or not athlete) and athlete_id is None:
             return
 
         try:
@@ -276,7 +352,8 @@ class BackendService:
                 device_id=str(session_payload.get("device_id", "")),
                 workout_type=str(session_payload.get("workout_type", "")),
                 mode=str(session_payload.get("mode", "")),
-                athlete=athlete,
+                athlete=athlete if isinstance(athlete, dict) else None,
+                athlete_id=athlete_id,
             )
         except Exception as exc:
             print(
@@ -351,6 +428,11 @@ def build_session_status_payload(
         "status": "active" if status == "started" else "stopped",
         "timestamp": timestamp or get_current_timestamp(),
     }
+    athlete_id = _parse_optional_int(
+        status_message.get("athlete_id") or status_message.get("user_id")
+    )
+    if athlete_id is not None:
+        payload["athlete_id"] = athlete_id
     mode = _non_empty_string(status_message.get("mode"))
     if mode:
         payload["mode"] = mode
@@ -373,16 +455,112 @@ def _clean_athlete(value: Any) -> dict[str, Any]:
         return {}
 
     athlete = {}
-    for key in ("name", "email"):
+    for key in (
+        "name",
+        "email",
+        "gender",
+        "fitness_level",
+        "training_goal",
+    ):
         text = _non_empty_string(value.get(key))
         if text is not None:
             athlete[key] = text
 
-    for key in ("age", "weight_kg", "height_cm"):
+    for key in (
+        "id",
+        "athlete_id",
+        "user_id",
+        "age",
+        "weight_kg",
+        "height_cm",
+        "max_heart_rate",
+    ):
         if key in value:
             athlete[key] = value[key]
 
     return athlete
+
+
+def _athlete_from_context(context: dict[str, Any] | None) -> dict[str, Any]:
+    if not context:
+        return {}
+    athlete = context.get("athlete")
+    return dict(athlete) if isinstance(athlete, dict) else {}
+
+
+def _load_stored_athlete_for_context(
+    message: dict[str, Any],
+    athlete: dict[str, Any],
+) -> dict[str, Any] | None:
+    athlete_id = _parse_optional_int(
+        athlete.get("athlete_id") or athlete.get("user_id") or athlete.get("id")
+    )
+    if athlete_id is not None:
+        return _safe_get_athlete_by_id(athlete_id)
+    return _safe_get_athlete_for_session(
+        str(message["session_id"]),
+        device_id=str(message["device_id"]),
+    )
+
+
+def _safe_get_athlete_by_id(athlete_id: int) -> dict[str, Any] | None:
+    try:
+        return get_athlete_by_id(athlete_id)
+    except Exception:
+        return None
+
+
+def _safe_get_athlete_for_session(
+    session_id: str,
+    device_id: str | None = None,
+) -> dict[str, Any] | None:
+    try:
+        return get_athlete_for_session(session_id, device_id=device_id)
+    except Exception:
+        return None
+
+
+def _call_start_session(
+    session_id: str,
+    device_id: str,
+    start_time: str,
+    athlete_id: int | None = None,
+    athlete: dict[str, Any] | None = None,
+) -> None:
+    if _callable_accepts_keywords(start_session, {"athlete_id", "athlete"}):
+        start_session(
+            session_id,
+            device_id,
+            start_time,
+            athlete_id=athlete_id,
+            athlete=athlete,
+        )
+        return
+    start_session(session_id, device_id, start_time)
+
+
+def _call_stop_session(
+    session_id: str,
+    end_time: str,
+    athlete_id: int | None = None,
+) -> None:
+    if _callable_accepts_keywords(stop_session, {"athlete_id"}):
+        stop_session(session_id, end_time, athlete_id=athlete_id)
+        return
+    stop_session(session_id, end_time)
+
+
+def _callable_accepts_keywords(callable_object: Any, keywords: set[str]) -> bool:
+    try:
+        signature = inspect.signature(callable_object)
+    except (TypeError, ValueError):
+        return True
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    ):
+        return True
+    return any(keyword in signature.parameters for keyword in keywords)
 
 
 def _parse_positive_int(value: Any) -> int | None:
@@ -393,6 +571,10 @@ def _parse_positive_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return number if number > 0 else None
+
+
+def _parse_optional_int(value: Any) -> int | None:
+    return _parse_positive_int(value)
 
 
 def _parse_positive_float(value: Any, default: Any) -> float:

@@ -9,6 +9,7 @@ from database_layer.db_connection import get_db_connection
 
 INSERT_DECISION_LOG = """
 INSERT INTO decision_logs (
+    athlete_id,
     device_id,
     session_id,
     timestamp,
@@ -21,7 +22,7 @@ INSERT INTO decision_logs (
     speaker_message,
     recommended_action,
     source_topic
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 SELECT_RECENT_DECISION_LOGS = """
@@ -47,6 +48,7 @@ ORDER BY decision_type
 
 INSERT_SESSION_ANALYTICS = """
 INSERT INTO session_analytics (
+    athlete_id,
     session_id,
     timestamp,
     average_speed_kmh,
@@ -61,7 +63,7 @@ INSERT INTO session_analytics (
     time_in_zone_hard,
     time_in_zone_peak,
     improvement_message
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 SELECT_RECENT_SESSION_ANALYTICS = """

@@ -4,6 +4,7 @@ from analytics_layer.improvement_analyzer import compare_session_performance
 from analytics_layer.session_analytics import (
     calculate_latest_session_analytics,
     calculate_session_analytics,
+    get_athlete_analytics,
     get_latest_session_id,
     get_previous_session_id,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "format_session_report_email",
     "format_session_report_html_email",
     "generate_session_report",
+    "get_athlete_analytics",
     "get_latest_session_id",
     "get_previous_session_id",
     "process_stopped_session_report",

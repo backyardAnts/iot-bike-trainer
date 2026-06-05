@@ -68,6 +68,7 @@ def process_stopped_session_report(
         str(report["workout_type"]),
         subject,
         body,
+        athlete_id=report.get("athlete_id"),
     ):
         print(f"Workout report already reserved for {session_id}; skipping email.")
         return {
@@ -196,6 +197,7 @@ def _calculate_session_metrics(
 
     return {
         "session_id": session_id,
+        "athlete_id": info["athlete_id"],
         "device_id": info["device_id"],
         "workout_type": info["workout_type"],
         "start_timestamp": info["start_timestamp"],
@@ -244,6 +246,13 @@ def _build_session_info(
         or _non_empty_string(first_reading.get("device_id"))
         or ""
     )
+    athlete_id = (
+        _status_athlete_id(stopped_status)
+        or _to_optional_int(session_row.get("athlete_id") if session_row else None)
+        or _to_optional_int(first_reading.get("athlete_id"))
+        or _most_common_athlete_id(decisions)
+        or _get_athlete_id_for_session(session_id)
+    )
     workout_type = (
         _status_value(stopped_status, "workout_type")
         or _most_common_workout_type(decisions)
@@ -268,6 +277,7 @@ def _build_session_info(
     )
     return {
         "session_id": session_id,
+        "athlete_id": athlete_id,
         "device_id": device_id,
         "workout_type": workout_type,
         "start_timestamp": start_timestamp,
@@ -407,9 +417,11 @@ def _compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
 
 def _build_same_workout_comparison(current: dict[str, Any]) -> dict[str, Any]:
     workout_type = str(current.get("workout_type", ""))
+    athlete_id = _to_optional_int(current.get("athlete_id"))
     previous_session_ids = _list_previous_session_ids_same_workout(
         str(current["session_id"]),
         workout_type,
+        athlete_id,
     )
     previous_reports = [
         _calculate_session_metrics(previous_session_id)
@@ -584,6 +596,7 @@ def _load_session_row(session_id: str) -> dict[str, Any] | None:
 def _list_previous_session_ids_same_workout(
     current_session_id: str,
     workout_type: str,
+    athlete_id: int | None,
 ) -> list[str]:
     if not workout_type:
         return []
@@ -591,23 +604,50 @@ def _list_previous_session_ids_same_workout(
     current_first_id = _get_first_reading_id(current_session_id)
     latest_allowed_id = current_first_id if current_first_id is not None else 10**18
     with get_db_connection() as connection:
-        rows = connection.execute(
-            """
-            SELECT sr.session_id, MAX(sr.id) AS latest_reading_id
-            FROM sensor_readings sr
-            WHERE sr.session_id != ?
-              AND EXISTS (
-                  SELECT 1
-                  FROM decision_logs dl
-                  WHERE dl.session_id = sr.session_id
-                    AND dl.workout_type = ?
-              )
-            GROUP BY sr.session_id
-            HAVING MAX(sr.id) < ?
-            ORDER BY latest_reading_id DESC
-            """,
-            (current_session_id, workout_type, latest_allowed_id),
-        ).fetchall()
+        if athlete_id is None:
+            rows = connection.execute(
+                """
+                SELECT sr.session_id, MAX(sr.id) AS latest_reading_id
+                FROM sensor_readings sr
+                WHERE sr.session_id != ?
+                  AND EXISTS (
+                      SELECT 1
+                      FROM decision_logs dl
+                      WHERE dl.session_id = sr.session_id
+                        AND dl.workout_type = ?
+                  )
+                GROUP BY sr.session_id
+                HAVING MAX(sr.id) < ?
+                ORDER BY latest_reading_id DESC
+                """,
+                (current_session_id, workout_type, latest_allowed_id),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT sr.session_id, MAX(sr.id) AS latest_reading_id
+                FROM sensor_readings sr
+                WHERE sr.session_id != ?
+                  AND sr.athlete_id = ?
+                  AND EXISTS (
+                      SELECT 1
+                      FROM decision_logs dl
+                      WHERE dl.session_id = sr.session_id
+                        AND dl.workout_type = ?
+                        AND dl.athlete_id = ?
+                  )
+                GROUP BY sr.session_id
+                HAVING MAX(sr.id) < ?
+                ORDER BY latest_reading_id DESC
+                """,
+                (
+                    current_session_id,
+                    athlete_id,
+                    workout_type,
+                    athlete_id,
+                    latest_allowed_id,
+                ),
+            ).fetchall()
 
     return [str(row["session_id"]) for row in rows]
 
@@ -650,6 +690,20 @@ def _most_common_workout_type(decisions: list[dict[str, Any]]) -> str | None:
     if not workout_types:
         return None
     return Counter(workout_types).most_common(1)[0][0]
+
+
+def _most_common_athlete_id(decisions: list[dict[str, Any]]) -> int | None:
+    athlete_ids = [
+        athlete_id
+        for athlete_id in (
+            _to_optional_int(decision.get("athlete_id"))
+            for decision in decisions
+        )
+        if athlete_id is not None
+    ]
+    if not athlete_ids:
+        return None
+    return Counter(athlete_ids).most_common(1)[0][0]
 
 
 def _estimate_distance_km(speeds: list[float], sample_seconds: int) -> float:
@@ -739,6 +793,12 @@ def _status_value(status: dict[str, Any] | None, key: str) -> str | None:
     return _non_empty_string(status.get(key))
 
 
+def _status_athlete_id(status: dict[str, Any] | None) -> int | None:
+    if status is None:
+        return None
+    return _to_optional_int(status.get("athlete_id") or status.get("user_id"))
+
+
 def _non_empty_string(value: Any) -> str | None:
     if value is None:
         return None
@@ -767,5 +827,34 @@ def _to_int(value: Any, default: int) -> int:
         return default
 
 
+def _to_optional_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
 def _delta(current_value: Any, baseline_value: Any) -> float:
     return round(float(current_value) - float(baseline_value), 1)
+
+
+def _get_athlete_id_for_session(session_id: str) -> int | None:
+    with get_db_connection() as connection:
+        for table in ("sessions", "sensor_readings", "decision_logs"):
+            row = connection.execute(
+                f"""
+                SELECT athlete_id
+                FROM {table}
+                WHERE session_id = ?
+                  AND athlete_id IS NOT NULL
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            if row is not None:
+                return int(row["athlete_id"])
+    return None

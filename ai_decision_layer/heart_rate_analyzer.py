@@ -41,13 +41,13 @@ def calculate_hr_percent(
     rider_profile: dict[str, Any],
 ) -> float:
     """Return heart rate as a fraction of estimated maximum heart rate."""
-    max_hr = estimate_max_hr(rider_profile.get("age", 20))
+    max_hr = _get_max_heart_rate(rider_profile)
     return float(heart_rate_bpm) / max_hr
 
 
 def calculate_hr_thresholds(rider_profile: dict[str, Any]) -> dict[str, float]:
     """Return max, warning, and danger heart-rate thresholds for a rider."""
-    max_hr = estimate_max_hr(rider_profile.get("age", 20))
+    max_hr = _get_max_heart_rate(rider_profile)
     return {
         "max_hr": max_hr,
         "warning_hr": max_hr * HR_WARNING_PERCENT_OF_MAX,
@@ -92,3 +92,15 @@ def check_heart_rate(
         )
 
     return None
+
+
+def _get_max_heart_rate(rider_profile: dict[str, Any]) -> float:
+    value = rider_profile.get("max_heart_rate")
+    if value is not None and not isinstance(value, bool):
+        try:
+            max_heart_rate = float(value)
+        except (TypeError, ValueError):
+            max_heart_rate = 0.0
+        if max_heart_rate > 0:
+            return max_heart_rate
+    return estimate_max_hr(rider_profile.get("age", 20))

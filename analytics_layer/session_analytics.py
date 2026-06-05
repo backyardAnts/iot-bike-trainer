@@ -18,9 +18,11 @@ HEART_RATE_ZONES = {
 }
 
 
-def calculate_latest_session_analytics() -> dict[str, Any] | None:
+def calculate_latest_session_analytics(
+    athlete_id: int | None = None,
+) -> dict[str, Any] | None:
     """Calculate analytics for the latest session with stored readings."""
-    latest_session_id = get_latest_session_id()
+    latest_session_id = get_latest_session_id(athlete_id=athlete_id)
     if latest_session_id is None:
         return None
 
@@ -31,8 +33,13 @@ def calculate_session_analytics(session_id: str) -> dict[str, Any]:
     """Calculate analytics for one session_id and compare with the previous session."""
     readings = load_readings_for_session(session_id)
     current_analytics = calculate_analytics_from_readings(session_id, readings)
+    athlete_id = _get_athlete_id_for_session(session_id)
+    current_analytics["athlete_id"] = athlete_id
 
-    previous_session_id = get_previous_session_id(session_id)
+    previous_session_id = get_previous_session_id(
+        session_id,
+        athlete_id=athlete_id,
+    )
     previous_analytics = None
     if previous_session_id is not None:
         previous_analytics = calculate_analytics_from_readings(
@@ -97,15 +104,23 @@ def load_readings_for_session(session_id: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def get_latest_session_id() -> str | None:
+def get_latest_session_id(athlete_id: int | None = None) -> str | None:
     """Return the newest session_id that has stored sensor readings."""
-    session_ids = list_session_ids_newest_first()
+    session_ids = list_session_ids_newest_first(athlete_id=athlete_id)
     return session_ids[0] if session_ids else None
 
 
-def get_previous_session_id(current_session_id: str) -> str | None:
+def get_previous_session_id(
+    current_session_id: str,
+    athlete_id: int | None = None,
+) -> str | None:
     """Return the session before current_session_id based on stored readings."""
-    session_ids = list_session_ids_newest_first()
+    scoped_athlete_id = (
+        athlete_id
+        if athlete_id is not None
+        else _get_athlete_id_for_session(current_session_id)
+    )
+    session_ids = list_session_ids_newest_first(athlete_id=scoped_athlete_id)
     try:
         current_index = session_ids.index(current_session_id)
     except ValueError:
@@ -118,25 +133,59 @@ def get_previous_session_id(current_session_id: str) -> str | None:
     return session_ids[previous_index]
 
 
-def list_session_ids_newest_first() -> list[str]:
+def list_session_ids_newest_first(athlete_id: int | None = None) -> list[str]:
     """Return session_ids ordered by their latest stored reading."""
+    with get_db_connection() as connection:
+        if athlete_id is None:
+            rows = connection.execute(
+                """
+                SELECT session_id, MAX(id) AS latest_reading_id
+                FROM sensor_readings
+                WHERE session_id IS NOT NULL AND session_id != ''
+                GROUP BY session_id
+                ORDER BY latest_reading_id DESC
+                """
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT session_id, MAX(id) AS latest_reading_id
+                FROM sensor_readings
+                WHERE session_id IS NOT NULL
+                  AND session_id != ''
+                  AND athlete_id = ?
+                GROUP BY session_id
+                ORDER BY latest_reading_id DESC
+                """,
+                (int(athlete_id),),
+            ).fetchall()
+
+    return [str(row["session_id"]) for row in rows]
+
+
+def get_athlete_analytics(
+    athlete_id: int,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Return saved analytics summaries for one athlete."""
     with get_db_connection() as connection:
         rows = connection.execute(
             """
-            SELECT session_id, MAX(id) AS latest_reading_id
-            FROM sensor_readings
-            WHERE session_id IS NOT NULL AND session_id != ''
-            GROUP BY session_id
-            ORDER BY latest_reading_id DESC
-            """
+            SELECT *
+            FROM session_analytics
+            WHERE athlete_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(athlete_id), max(1, int(limit))),
         ).fetchall()
-
-    return [str(row["session_id"]) for row in rows]
+    return [dict(row) for row in rows]
 
 
 def _empty_analytics(session_id: str) -> dict[str, Any]:
     return {
         "session_id": session_id,
+        "athlete_id": _get_athlete_id_for_session(session_id),
         "average_speed_kmh": 0.0,
         "average_cadence_rpm": 0.0,
         "average_heart_rate_bpm": 0.0,
@@ -217,3 +266,22 @@ def _parse_timestamp(timestamp: str) -> datetime | None:
         return datetime.fromisoformat(timestamp)
     except ValueError:
         return None
+
+
+def _get_athlete_id_for_session(session_id: str) -> int | None:
+    with get_db_connection() as connection:
+        for table in ("sessions", "sensor_readings", "decision_logs"):
+            row = connection.execute(
+                f"""
+                SELECT athlete_id
+                FROM {table}
+                WHERE session_id = ?
+                  AND athlete_id IS NOT NULL
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            if row is not None:
+                return int(row["athlete_id"])
+    return None

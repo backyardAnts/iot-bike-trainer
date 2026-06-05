@@ -22,8 +22,11 @@ def get_db_connection() -> sqlite3.Connection:
 
 def initialize_database() -> None:
     """Create the SQLite database and all required tables if missing."""
+    from database_layer.migrations import run_schema_migrations
+
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
 
     with get_db_connection() as connection:
         connection.executescript(schema_sql)
+        run_schema_migrations(connection)
