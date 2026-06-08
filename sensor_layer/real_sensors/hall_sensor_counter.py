@@ -17,7 +17,7 @@ POLL_DELAY_SECONDS = 0.001
 DEBOUNCE_SECONDS = 0.02
 STOP_TIMEOUT_SECONDS = 3.0
 AVERAGE_WINDOW = 5
-PULSES_PER_REVOLUTION = 1
+PULSES_PER_REVOLUTION = 4
 MAGNET_DETECTED_STATE = 0
 SUSPICIOUS_INTERVAL_FACTOR = 1.7
 
@@ -152,9 +152,7 @@ class HallSensorCounter(object):
         try:
             raw_value = int(self.grovepi.digitalRead(self.port))
         except Exception as exc:
-            self._warn_once(
-                "{} D{} read failed: {}".format(self.label, self.port, exc)
-            )
+            self._warn_once("{} D{} read failed: {}".format(self.label, self.port, exc))
             time.sleep(0.1)
             return
 

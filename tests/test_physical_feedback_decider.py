@@ -353,6 +353,79 @@ class PhysicalFeedbackDeciderTest(unittest.TestCase):
         self.assertFalse(bike.buzzer.enabled)
         self.assertEqual(bike.lcd.last_message, ("SAFE", "No object close"))
 
+    def test_real_bike_command_mode_local_ultrasonic_warning_turns_buzzer_on(
+        self,
+    ) -> None:
+        bike = _make_fake_real_bike(
+            command_feedback_enabled=True,
+            left_distance_m=0.49,
+            right_distance_m=2.0,
+        )
+
+        message = bike.update()
+
+        self.assertTrue(bike.local_ultrasonic_alert_active)
+        self.assertEqual(bike.local_alert_side, "left")
+        self.assertTrue(bike.local_buzzer_state)
+        self.assertTrue(bike.buzzer.enabled)
+        self.assertEqual(bike.lcd.last_message, ("WARNING LEFT", "Object close"))
+        self.assertEqual(message["left_distance_m"], 0.49)
+        self.assertEqual(message["right_distance_m"], 2.0)
+        self.assertEqual(message["alert_level"], "warning")
+        self.assertEqual(message["alert_side"], "left")
+        self.assertTrue(message["buzzer_state"])
+        self.assertEqual(message["display_message"], "WARNING LEFT")
+
+    def test_real_bike_local_ultrasonic_alert_uses_hysteresis_before_clearing(
+        self,
+    ) -> None:
+        bike = _make_fake_real_bike(
+            command_feedback_enabled=True,
+            left_distance_m=0.49,
+            right_distance_m=2.0,
+        )
+
+        bike.update()
+        bike.ultrasonic_sensors.set_distances(0.55, 2.0)
+        message_in_hysteresis_band = bike.update()
+        bike.ultrasonic_sensors.set_distances(0.61, 2.0)
+        message_after_clear = bike.update()
+
+        self.assertTrue(message_in_hysteresis_band["buzzer_state"])
+        self.assertEqual(message_in_hysteresis_band["alert_side"], "left")
+        self.assertFalse(bike.local_ultrasonic_alert_active)
+        self.assertFalse(bike.local_buzzer_state)
+        self.assertFalse(bike.buzzer.enabled)
+        self.assertFalse(message_after_clear["buzzer_state"])
+        self.assertEqual(message_after_clear["alert_level"], "normal")
+
+    def test_backend_safe_command_cannot_turn_off_active_local_ultrasonic_buzzer(
+        self,
+    ) -> None:
+        bike = _make_fake_real_bike(
+            command_feedback_enabled=True,
+            left_distance_m=0.49,
+            right_distance_m=2.0,
+        )
+        safe_command = {
+            "command": "update_feedback",
+            "display_active": False,
+            "display_message": "SAFE",
+            "speaker_message": "",
+            "alert_level": "normal",
+            "alert_side": "none",
+            "buzzer_state": False,
+            "decision_type": "physical_safety",
+            "recommended_action": "safe",
+        }
+
+        bike.update()
+        bike.apply_physical_feedback_command(safe_command)
+
+        self.assertTrue(bike.local_ultrasonic_alert_active)
+        self.assertTrue(bike.buzzer.enabled)
+        self.assertEqual(bike.lcd.last_message, ("WARNING LEFT", "Object close"))
+
 
 class _FakeRealBike:
     def __init__(self) -> None:
@@ -386,14 +459,26 @@ class _FakeLcd:
 
 
 class _FakeUltrasonicSensors:
+    def __init__(
+        self,
+        left_distance_m: float = 2.0,
+        right_distance_m: float = 2.0,
+    ) -> None:
+        self.left_distance_m = float(left_distance_m)
+        self.right_distance_m = float(right_distance_m)
+
+    def set_distances(self, left_distance_m: float, right_distance_m: float) -> None:
+        self.left_distance_m = float(left_distance_m)
+        self.right_distance_m = float(right_distance_m)
+
     def read(self) -> tuple[float, float]:
-        return (2.0, 2.0)
+        return (self.left_distance_m, self.right_distance_m)
 
     def get_last_status(self) -> dict[str, object]:
         return {
-            "left_raw_cm": 200,
+            "left_raw_cm": self.left_distance_m * 100.0,
             "left_valid": True,
-            "right_raw_cm": 200,
+            "right_raw_cm": self.right_distance_m * 100.0,
             "right_valid": True,
         }
 
@@ -415,7 +500,11 @@ def _make_workout_command(
     return build_feedback_command(decision)
 
 
-def _make_fake_real_bike(command_feedback_enabled: bool) -> RealBike:
+def _make_fake_real_bike(
+    command_feedback_enabled: bool,
+    left_distance_m: float = 2.0,
+    right_distance_m: float = 2.0,
+) -> RealBike:
     bike = object.__new__(RealBike)
     bike.device_id = "bike_001"
     bike.session_id = "session_test"
@@ -425,7 +514,10 @@ def _make_fake_real_bike(command_feedback_enabled: bool) -> RealBike:
     bike.temperature_debug = False
     bike.hall_sensors = None
     bike.temperature_sensor = None
-    bike.ultrasonic_sensors = _FakeUltrasonicSensors()
+    bike.ultrasonic_sensors = _FakeUltrasonicSensors(
+        left_distance_m,
+        right_distance_m,
+    )
     bike.command_feedback_enabled = command_feedback_enabled
     bike.command_timeout_seconds = 3.0
     bike._last_command_time = None
@@ -441,6 +533,9 @@ def _make_fake_real_bike(command_feedback_enabled: bool) -> RealBike:
     bike._last_lcd_lines = None
     bike._last_workout_buzzer_pulse_time = None
     bike._last_workout_buzzer_pulse_action = ""
+    bike.local_ultrasonic_alert_active = False
+    bike.local_alert_side = "none"
+    bike.local_buzzer_state = False
     return bike
 
 

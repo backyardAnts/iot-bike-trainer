@@ -25,6 +25,7 @@ from sensor_layer.real_sensors.ultrasonic_sensors import UltrasonicSensors
 
 
 WARNING_THRESHOLD_CM = PHYSICAL_WARNING_THRESHOLD_CM
+LOCAL_ULTRASONIC_CLEAR_THRESHOLD_CM = PHYSICAL_WARNING_THRESHOLD_CM + 10.0
 WORKOUT_BUZZER_PULSE_COOLDOWN_SECONDS = 10.0
 
 
@@ -110,6 +111,9 @@ class RealBike(object):
         self._last_lcd_lines = None  # type: Optional[Tuple[str, str]]
         self._last_workout_buzzer_pulse_time = None  # type: Optional[float]
         self._last_workout_buzzer_pulse_action = ""  # type: str
+        self.local_ultrasonic_alert_active = False
+        self.local_alert_side = settings.DEFAULT_ALERT_SIDE
+        self.local_buzzer_state = False
 
     def show_startup_lcd_message(self) -> None:
         """Display a short startup LCD confirmation if LCD is enabled."""
@@ -121,15 +125,32 @@ class RealBike(object):
         """Read all physical sensors and return one JSON-ready dictionary."""
         left_distance_m, right_distance_m = self.ultrasonic_sensors.read()
         ultrasonic_status = self.ultrasonic_sensors.get_last_status()
+
+        was_local_ultrasonic_alert_active = self.local_ultrasonic_alert_active
+        local_feedback = self._update_local_ultrasonic_safety(
+            left_distance_m,
+            right_distance_m,
+        )
+        if local_feedback is not None:
+            # Ultrasonic collision safety is handled locally for low-latency
+            # buzzer/LCD response; MQTT/backend still receive telemetry.
+            feedback = self._apply_hardware_feedback(local_feedback)
+        elif was_local_ultrasonic_alert_active:
+            feedback = self._feedback_after_local_ultrasonic_clear()
+            feedback = self._apply_hardware_feedback(feedback)
+        else:
+            feedback = None
+
         speed_kmh, cadence_rpm = self._read_hall_values()
         temperature_c, humidity_percent = self._read_temperature_values()
 
         feedback_input = self._build_feedback_input(left_distance_m, right_distance_m)
-        if self._should_use_local_feedback_fallback():
-            feedback = decide_physical_feedback(feedback_input)
-            self._apply_hardware_feedback(feedback)
-        else:
-            feedback = self._latest_feedback
+        if feedback is None:
+            if self._should_use_local_feedback_fallback():
+                feedback = decide_physical_feedback(feedback_input)
+                feedback = self._apply_hardware_feedback(feedback)
+            else:
+                feedback = self._latest_feedback
 
         buzzer_state = bool(feedback["buzzer_state"])
         self._latest_status = self._format_status_line(
@@ -239,12 +260,17 @@ class RealBike(object):
         feedback = self._normalize_feedback_command(command_data)
         self._last_command_time = time.monotonic()
 
+        if feedback["decision_type"] == "workout_guidance":
+            self._latest_workout_feedback = dict(feedback)
+
+        if self.local_ultrasonic_alert_active:
+            local_feedback = self._build_local_ultrasonic_feedback()
+            self._apply_hardware_feedback(local_feedback)
+            return
+
         if self._is_suppressed_backend_safe_feedback(feedback):
             self._apply_backend_safe_feedback(feedback)
             return
-
-        if feedback["decision_type"] == "workout_guidance":
-            self._latest_workout_feedback = dict(feedback)
 
         self._apply_hardware_feedback(feedback)
         self._apply_workout_buzzer_pulse(self._latest_feedback)
@@ -398,6 +424,65 @@ class RealBike(object):
     def _should_use_local_feedback_fallback(self) -> bool:
         return not self.command_feedback_enabled
 
+    def _update_local_ultrasonic_safety(
+        self,
+        left_distance_m: float,
+        right_distance_m: float,
+    ) -> Optional[Dict[str, Any]]:
+        left_triggered = _is_distance_below_cm(left_distance_m, WARNING_THRESHOLD_CM)
+        right_triggered = _is_distance_below_cm(right_distance_m, WARNING_THRESHOLD_CM)
+
+        if left_triggered or right_triggered:
+            self.local_ultrasonic_alert_active = True
+            self.local_alert_side = _alert_side(left_triggered, right_triggered)
+        elif self.local_ultrasonic_alert_active and _are_distances_above_cm(
+            left_distance_m,
+            right_distance_m,
+            LOCAL_ULTRASONIC_CLEAR_THRESHOLD_CM,
+        ):
+            self.local_ultrasonic_alert_active = False
+            self.local_alert_side = settings.DEFAULT_ALERT_SIDE
+
+        self.local_buzzer_state = self.local_ultrasonic_alert_active
+        if not self.local_ultrasonic_alert_active:
+            return None
+
+        return self._build_local_ultrasonic_feedback()
+
+    def _build_local_ultrasonic_feedback(self) -> Dict[str, Any]:
+        alert_distance_m = max(0.0, (WARNING_THRESHOLD_CM - 1.0) / 100.0)
+        safe_distance_m = 9.99
+        alert_side = str(self.local_alert_side)
+        feedback = decide_physical_feedback(
+            {
+                "workout_type": self.workout_type,
+                "left_distance_m": (
+                    alert_distance_m
+                    if alert_side in {"left", "both"}
+                    else safe_distance_m
+                ),
+                "right_distance_m": (
+                    alert_distance_m
+                    if alert_side in {"right", "both"}
+                    else safe_distance_m
+                ),
+            }
+        )
+        feedback["buzzer_state"] = True
+        return feedback
+
+    def _feedback_after_local_ultrasonic_clear(self) -> Dict[str, Any]:
+        if self._latest_workout_feedback is not None:
+            restored_feedback = dict(self._latest_workout_feedback)
+            restored_feedback["buzzer_state"] = False
+            restored_feedback["led_state"] = False
+            return restored_feedback
+
+        safe_feedback = self._build_safe_feedback()
+        safe_feedback["buzzer_state"] = False
+        safe_feedback["led_state"] = False
+        return safe_feedback
+
     def _build_feedback_input(
         self,
         left_distance_m: float,
@@ -418,10 +503,11 @@ class RealBike(object):
             }
         )
 
-    def _apply_hardware_feedback(self, feedback: Dict[str, Any]) -> None:
+    def _apply_hardware_feedback(self, feedback: Dict[str, Any]) -> Dict[str, Any]:
         self._latest_feedback = self._normalize_feedback_command(feedback)
         self.buzzer.set_state(bool(self._latest_feedback["buzzer_state"]))
         self._update_lcd(self._latest_feedback)
+        return self._latest_feedback
 
     def _apply_workout_buzzer_pulse(self, feedback: Dict[str, Any]) -> None:
         if feedback.get("decision_type") != "workout_guidance":
@@ -609,6 +695,45 @@ def _coerce_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _distance_to_cm(value: Any) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    try:
+        distance_m = float(value)
+    except (TypeError, ValueError):
+        return None
+    if distance_m < 0:
+        return None
+    return distance_m * 100.0
+
+
+def _is_distance_below_cm(value: Any, threshold_cm: float) -> bool:
+    distance_cm = _distance_to_cm(value)
+    return distance_cm is not None and distance_cm < float(threshold_cm)
+
+
+def _are_distances_above_cm(
+    left_distance_m: Any,
+    right_distance_m: Any,
+    threshold_cm: float,
+) -> bool:
+    left_cm = _distance_to_cm(left_distance_m)
+    right_cm = _distance_to_cm(right_distance_m)
+    if left_cm is None or right_cm is None:
+        return False
+    return left_cm > float(threshold_cm) and right_cm > float(threshold_cm)
+
+
+def _alert_side(left_alert: bool, right_alert: bool) -> str:
+    if left_alert and right_alert:
+        return "both"
+    if left_alert:
+        return "left"
+    if right_alert:
+        return "right"
+    return settings.DEFAULT_ALERT_SIDE
 
 
 def _clean_optional_text(value: Any) -> Optional[str]:
