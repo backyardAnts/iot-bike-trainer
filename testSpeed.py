@@ -1,48 +1,92 @@
-import grovepi
 import time
+from collections import deque
+import grovepi
 
+# Change this if your speed Hall sensor is on another port
 SPEED_PIN = 3
-WHEEL_CIRCUMFERENCE_M = 2.1  # adjust based on your wheel size
-PULSES_PER_REV = 1  # change to 2 if you use 2 magnets
+
+# Your old output suggests you used around 2.09m to 2.10m
+# Adjust this based on your wheel circumference
+WHEEL_CIRCUMFERENCE_M = 2.09
+
+# 1 magnet on the wheel = 1 pulse per wheel rotation
+# 2 magnets = 2
+PULSES_PER_REVOLUTION = 1
+
+# Most Hall modules are HIGH normally and LOW when magnet is detected
+MAGNET_DETECTED_STATE = 0
+
+# Ignore very fast duplicate triggers/noise
+DEBOUNCE_SECONDS = 0.04
+
+# After this many seconds without a pulse, speed becomes 0
+STOP_TIMEOUT_SECONDS = 3.0
+
+# Average the last few pulse-based speed readings
+AVERAGE_WINDOW = 5
+
+POLL_DELAY_SECONDS = 0.003
 
 grovepi.pinMode(SPEED_PIN, "INPUT")
 
-pulse_count = 0
-last_state = 1
-last_pulse_time = 0
-start_time = time.time()
+last_state = grovepi.digitalRead(SPEED_PIN)
+last_pulse_time = None
+last_valid_pulse_time = None
+speed_samples = deque(maxlen=AVERAGE_WINDOW)
 
-DEBOUNCE_TIME = 0.05  # 50 ms
+last_print_time = time.monotonic()
 
-while True:
-    try:
+print("Accurate speed test started.")
+print("Move the magnet slowly first, then spin the wheel.")
+print("Press CTRL+C to stop.\n")
+
+try:
+    while True:
+        now = time.monotonic()
         state = grovepi.digitalRead(SPEED_PIN)
-        now = time.time()
 
-        # Detect falling edge: magnet detected
-        if last_state == 1 and state == 0:
-            if now - last_pulse_time > DEBOUNCE_TIME:
-                pulse_count += 1
+        # Detect transition into magnet-detected state
+        if last_state != MAGNET_DETECTED_STATE and state == MAGNET_DETECTED_STATE:
+            if (
+                last_valid_pulse_time is None
+                or (now - last_valid_pulse_time) >= DEBOUNCE_SECONDS
+            ):
+                if last_pulse_time is not None:
+                    interval = now - last_pulse_time
+
+                    instant_speed_kmh = (
+                        WHEEL_CIRCUMFERENCE_M / (interval * PULSES_PER_REVOLUTION)
+                    ) * 3.6
+
+                    speed_samples.append(instant_speed_kmh)
+                    avg_speed_kmh = sum(speed_samples) / len(speed_samples)
+
+                    print(
+                        f"Pulse | interval={interval:.3f}s | "
+                        f"instant={instant_speed_kmh:.2f} km/h | "
+                        f"average={avg_speed_kmh:.2f} km/h"
+                    )
+                else:
+                    print(
+                        "First pulse detected. Waiting for next pulse to calculate speed."
+                    )
+
                 last_pulse_time = now
-                print("Pulse detected:", pulse_count)
+                last_valid_pulse_time = now
 
         last_state = state
 
-        elapsed = now - start_time
+        # Print 0 only if the wheel really stopped for a few seconds
+        if (
+            last_pulse_time is not None
+            and (now - last_pulse_time) > STOP_TIMEOUT_SECONDS
+        ):
+            if speed_samples:
+                print("No pulse recently. Speed: 0.00 km/h")
+                speed_samples.clear()
+            last_pulse_time = None
 
-        if elapsed >= 2:
-            wheel_revs = pulse_count / PULSES_PER_REV
-            speed_kmh = (wheel_revs * WHEEL_CIRCUMFERENCE_M / elapsed) * 3.6
+        time.sleep(POLL_DELAY_SECONDS)
 
-            print("Speed:", round(speed_kmh, 2), "km/h")
-
-            pulse_count = 0
-            start_time = now
-
-        time.sleep(0.005)
-
-    except KeyboardInterrupt:
-        break
-    except Exception as e:
-        print("Error:", e)
-        time.sleep(0.1)
+except KeyboardInterrupt:
+    print("\nStopped speed test.")
