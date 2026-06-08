@@ -14,12 +14,12 @@ from sensor_layer.real_sensors.grovepi_imports import get_grovepi_error, load_gr
 MAX_SPEED_KMH = 80.0
 MAX_CADENCE_RPM = 180
 POLL_DELAY_SECONDS = 0.001
-DEBOUNCE_SECONDS = 0.02
+DEBOUNCE_SECONDS = 0.04
 STOP_TIMEOUT_SECONDS = 3.0
-AVERAGE_WINDOW = 5
-PULSES_PER_REVOLUTION = 4
+AVERAGE_WINDOW = 10
+PULSES_PER_REVOLUTION = 2
 MAGNET_DETECTED_STATE = 0
-SUSPICIOUS_INTERVAL_FACTOR = 1.7
+SUSPICIOUS_INTERVAL_FACTOR = 2.2
 
 
 class HallSensorCounter(object):
@@ -58,8 +58,17 @@ class HallSensorCounter(object):
         self._event_count = 0
         self._last_event_time = None  # type: Optional[float]
         self._previous_event_time = None  # type: Optional[float]
+
+        # Stores full-rotation periods, not only adjacent magnet-to-magnet periods.
         self._last_period_seconds = None  # type: Optional[float]
         self._period_samples = deque(maxlen=self.average_window)
+
+        # Stores recent pulse timestamps so we can calculate full rotations.
+        # Example with 2 magnets:
+        # pulse 3 - pulse 1 = one full wheel rotation
+        # pulse 4 - pulse 2 = one full wheel rotation
+        self._pulse_timestamps = deque(maxlen=max(2, self.magnets_per_rotation + 1))
+
         self._consecutive_suspicious_intervals = 0
         self._last_error = ""
 
@@ -117,14 +126,18 @@ class HallSensorCounter(object):
             seconds_since_last_event is not None
             and seconds_since_last_event > self.timeout_seconds
         )
-        events_per_second = 0.0
+
         average_period_seconds = None  # type: Optional[float]
+        rotations_per_second = 0.0
+
         if period_samples and not stopped:
             average_period_seconds = sum(period_samples) / len(period_samples)
-            events_per_second = 1.0 / average_period_seconds
+            if average_period_seconds > 0:
+                rotations_per_second = 1.0 / average_period_seconds
 
-        rotations_per_second = events_per_second / self.magnets_per_rotation
+        events_per_second = rotations_per_second * self.magnets_per_rotation
         rpm = rotations_per_second * 60.0
+
         return {
             "raw_value": raw_value,
             "event_count": event_count,
@@ -159,6 +172,7 @@ class HallSensorCounter(object):
         now = time.monotonic()
         with self._lock:
             self._raw_value = raw_value
+
             if self._previous_raw_value is None:
                 self._previous_raw_value = raw_value
                 return
@@ -169,6 +183,7 @@ class HallSensorCounter(object):
             previous_raw_value = self._previous_raw_value
             self._previous_raw_value = raw_value
 
+            # Count only the edge where the magnet becomes detected.
             if (
                 previous_raw_value == self.magnet_detected_state
                 or raw_value != self.magnet_detected_state
@@ -184,29 +199,63 @@ class HallSensorCounter(object):
         ):
             return
 
-        period_seconds = None  # type: Optional[float]
-        if self._last_event_time is not None:
-            period_seconds = now - self._last_event_time
-
-        if period_seconds is not None and period_seconds > self.timeout_seconds:
+        if (
+            self._last_event_time is not None
+            and now - self._last_event_time > self.timeout_seconds
+        ):
             self._period_samples.clear()
+            self._pulse_timestamps.clear()
             self._consecutive_suspicious_intervals = 0
-            period_seconds = None
 
-        effective_period_seconds = self._effective_period_seconds(period_seconds)
+        full_rotation_period_seconds = self._calculate_full_rotation_period(now)
+
+        effective_period_seconds = self._effective_period_seconds(
+            full_rotation_period_seconds
+        )
         if effective_period_seconds is not None:
             self._period_samples.append(effective_period_seconds)
             self._last_period_seconds = effective_period_seconds
 
+        self._pulse_timestamps.append(now)
         self._previous_event_time = self._last_event_time
         self._last_event_time = now
         self._event_count += 1
+
+    def _calculate_full_rotation_period(self, now: float) -> Optional[float]:
+        """Calculate one full rotation period.
+
+        With 1 magnet:
+            current pulse - previous pulse = one rotation
+
+        With 2 magnets:
+            current pulse - pulse from 2 pulses ago = one rotation
+
+        This is more stable than adjacent pulse timing because it reduces the
+        effect of magnets not being perfectly 180 degrees apart.
+        """
+        if self.magnets_per_rotation <= 1:
+            if self._last_event_time is None:
+                return None
+            return now - self._last_event_time
+
+        if len(self._pulse_timestamps) < self.magnets_per_rotation:
+            return None
+
+        matching_previous_pulse_time = self._pulse_timestamps[
+            -self.magnets_per_rotation
+        ]
+        return now - matching_previous_pulse_time
 
     def _effective_period_seconds(
         self,
         period_seconds: Optional[float],
     ) -> Optional[float]:
         if period_seconds is None or period_seconds <= 0:
+            return None
+
+        if period_seconds > self.timeout_seconds:
+            self._period_samples.clear()
+            self._consecutive_suspicious_intervals = 0
             return None
 
         if not self._period_samples:
@@ -222,17 +271,18 @@ class HallSensorCounter(object):
             self._consecutive_suspicious_intervals = 0
             return period_seconds
 
-        missed_pulse_count = int(round(period_seconds / average_period_seconds))
-        if missed_pulse_count < 2:
+        missed_rotation_count = int(round(period_seconds / average_period_seconds))
+        if missed_rotation_count < 2:
             self._consecutive_suspicious_intervals = 0
             return period_seconds
 
         self._consecutive_suspicious_intervals += 1
+
         if self._consecutive_suspicious_intervals == 1:
-            corrected_period_seconds = period_seconds / missed_pulse_count
+            corrected_period_seconds = period_seconds / missed_rotation_count
             if self.debug:
                 print(
-                    "{} D{} suspicious interval {:.3f}s corrected to {:.3f}s".format(
+                    "{} D{} suspicious rotation interval {:.3f}s corrected to {:.3f}s".format(
                         self.label,
                         self.port,
                         period_seconds,
@@ -260,7 +310,7 @@ class SpeedCadenceHallSensors(object):
         speed_port: int = 3,
         cadence_port: int = 4,
         wheel_diameter_cm: float = 70.0,
-        speed_magnets_per_rotation: int = 1,
+        speed_magnets_per_rotation: int = PULSES_PER_REVOLUTION,
         cadence_magnets_per_rotation: int = 1,
         debounce_seconds: float = DEBOUNCE_SECONDS,
         poll_interval_seconds: float = POLL_DELAY_SECONDS,
@@ -272,6 +322,7 @@ class SpeedCadenceHallSensors(object):
         self.wheel_diameter_cm = float(wheel_diameter_cm)
         self.wheel_circumference_m = math.pi * (self.wheel_diameter_cm / 100.0)
         self.debug = bool(debug)
+
         self.speed_counter = HallSensorCounter(
             port=speed_port,
             label="Speed",
@@ -283,6 +334,7 @@ class SpeedCadenceHallSensors(object):
             debug=debug,
             auto_start=background_polling,
         )
+
         self.cadence_counter = HallSensorCounter(
             port=cadence_port,
             label="Cadence",
@@ -294,6 +346,7 @@ class SpeedCadenceHallSensors(object):
             debug=debug,
             auto_start=background_polling,
         )
+
         self._speed_kmh = 0.0
         self._cadence_rpm = 0
         self._last_error = ""
@@ -319,25 +372,50 @@ class SpeedCadenceHallSensors(object):
 
         speed_rps = float(self._last_speed_measurement["rotations_per_second"])
         cadence_rpm = float(self._last_cadence_measurement["rpm"])
+
         self._speed_kmh = self._clean_speed_kmh(
             speed_rps * self.wheel_circumference_m * 3.6
         )
         self._cadence_rpm = self._clean_cadence_rpm(cadence_rpm)
+
         return self._speed_kmh, self._cadence_rpm
 
     def get_debug_text(self) -> str:
         """Return one-line raw/event debug text for terminal output."""
         speed_raw = self._format_raw(self._last_speed_measurement.get("raw_value"))
         cadence_raw = self._format_raw(self._last_cadence_measurement.get("raw_value"))
+
+        speed_period = self._format_float(
+            self._last_speed_measurement.get("period_seconds")
+        )
+        speed_avg = self._format_float(
+            self._last_speed_measurement.get("average_period_seconds")
+        )
+        cadence_period = self._format_float(
+            self._last_cadence_measurement.get("period_seconds")
+        )
+        cadence_avg = self._format_float(
+            self._last_cadence_measurement.get("average_period_seconds")
+        )
+
         return (
-            "HALL DEBUG: SPEED D3 raw={speed_raw} events={speed_events} | "
-            "CADENCE D4 raw={cadence_raw} events={cadence_events} | "
+            "HALL DEBUG: "
+            "SPEED D3 raw={speed_raw} events={speed_events} "
+            "period={speed_period}s avg={speed_avg}s samples={speed_samples} | "
+            "CADENCE D4 raw={cadence_raw} events={cadence_events} "
+            "period={cadence_period}s avg={cadence_avg}s samples={cadence_samples} | "
             "speed={speed:.2f} km/h cadence={cadence:d} rpm"
         ).format(
             speed_raw=speed_raw,
             speed_events=self._last_speed_measurement.get("event_count", 0),
+            speed_period=speed_period,
+            speed_avg=speed_avg,
+            speed_samples=self._last_speed_measurement.get("sample_count", 0),
             cadence_raw=cadence_raw,
             cadence_events=self._last_cadence_measurement.get("event_count", 0),
+            cadence_period=cadence_period,
+            cadence_avg=cadence_avg,
+            cadence_samples=self._last_cadence_measurement.get("sample_count", 0),
             speed=self._speed_kmh,
             cadence=self._cadence_rpm,
         )
@@ -351,6 +429,14 @@ class SpeedCadenceHallSensors(object):
         if raw_value is None:
             return "INVALID"
         return str(raw_value)
+
+    def _format_float(self, value: Any) -> str:
+        if value is None:
+            return "N/A"
+        try:
+            return "{:.3f}".format(float(value))
+        except Exception:
+            return "N/A"
 
     def _clean_speed_kmh(self, value: float) -> float:
         speed_kmh = round(float(value), 2)
