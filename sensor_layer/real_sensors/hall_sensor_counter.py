@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 import math
 import threading
 import time
@@ -12,28 +13,39 @@ from sensor_layer.real_sensors.grovepi_imports import get_grovepi_error, load_gr
 
 MAX_SPEED_KMH = 80.0
 MAX_CADENCE_RPM = 180
+POLL_DELAY_SECONDS = 0.001
+DEBOUNCE_SECONDS = 0.02
+STOP_TIMEOUT_SECONDS = 3.0
+AVERAGE_WINDOW = 5
+PULSES_PER_REVOLUTION = 1
+MAGNET_DETECTED_STATE = 0
+SUSPICIOUS_INTERVAL_FACTOR = 1.7
 
 
 class HallSensorCounter(object):
-    """Poll one Hall sensor and count debounced raw state changes."""
+    """Poll one Hall sensor and measure debounced magnet pulse intervals."""
 
     def __init__(
         self,
         port: int,
         label: str,
-        debounce_seconds: float = 0.25,
-        magnets_per_rotation: int = 1,
-        poll_interval_seconds: float = 0.05,
-        timeout_seconds: float = 3.0,
+        debounce_seconds: float = DEBOUNCE_SECONDS,
+        magnets_per_rotation: int = PULSES_PER_REVOLUTION,
+        poll_interval_seconds: float = POLL_DELAY_SECONDS,
+        timeout_seconds: float = STOP_TIMEOUT_SECONDS,
+        average_window: int = AVERAGE_WINDOW,
+        magnet_detected_state: int = MAGNET_DETECTED_STATE,
         debug: bool = False,
         auto_start: bool = False,
     ) -> None:
         self.port = int(port)
         self.label = str(label)
-        self.debounce_seconds = max(0.25, float(debounce_seconds))
+        self.debounce_seconds = max(0.0, float(debounce_seconds))
         self.magnets_per_rotation = max(1, int(magnets_per_rotation))
-        self.poll_interval_seconds = float(poll_interval_seconds)
-        self.timeout_seconds = float(timeout_seconds)
+        self.poll_interval_seconds = max(0.001, float(poll_interval_seconds))
+        self.timeout_seconds = max(0.1, float(timeout_seconds))
+        self.average_window = max(1, int(average_window))
+        self.magnet_detected_state = int(magnet_detected_state)
         self.debug = bool(debug)
         self.auto_start = bool(auto_start)
         self.grovepi = load_grovepi()
@@ -46,6 +58,9 @@ class HallSensorCounter(object):
         self._event_count = 0
         self._last_event_time = None  # type: Optional[float]
         self._previous_event_time = None  # type: Optional[float]
+        self._last_period_seconds = None  # type: Optional[float]
+        self._period_samples = deque(maxlen=self.average_window)
+        self._consecutive_suspicious_intervals = 0
         self._last_error = ""
 
         if self.grovepi is None:
@@ -90,24 +105,23 @@ class HallSensorCounter(object):
             event_count = self._event_count
             last_event_time = self._last_event_time
             previous_event_time = self._previous_event_time
+            last_period_seconds = self._last_period_seconds
+            period_samples = tuple(self._period_samples)
 
         now = time.monotonic()
         seconds_since_last_event = None  # type: Optional[float]
         if last_event_time is not None:
             seconds_since_last_event = now - last_event_time
 
-        period_seconds = None  # type: Optional[float]
-        if last_event_time is not None and previous_event_time is not None:
-            period_seconds = last_event_time - previous_event_time
-
+        stopped = (
+            seconds_since_last_event is not None
+            and seconds_since_last_event > self.timeout_seconds
+        )
         events_per_second = 0.0
-        if (
-            period_seconds is not None
-            and period_seconds > 0
-            and seconds_since_last_event is not None
-            and seconds_since_last_event <= self.timeout_seconds
-        ):
-            events_per_second = 1.0 / period_seconds
+        average_period_seconds = None  # type: Optional[float]
+        if period_samples and not stopped:
+            average_period_seconds = sum(period_samples) / len(period_samples)
+            events_per_second = 1.0 / average_period_seconds
 
         rotations_per_second = events_per_second / self.magnets_per_rotation
         rpm = rotations_per_second * 60.0
@@ -115,11 +129,14 @@ class HallSensorCounter(object):
             "raw_value": raw_value,
             "event_count": event_count,
             "last_event_time": last_event_time,
-            "period_seconds": period_seconds,
+            "previous_event_time": previous_event_time,
+            "period_seconds": last_period_seconds,
+            "average_period_seconds": average_period_seconds,
             "seconds_since_last_event": seconds_since_last_event,
             "events_per_second": events_per_second,
             "rotations_per_second": rotations_per_second,
             "rpm": rpm,
+            "sample_count": len(period_samples),
         }
 
     def _poll_loop(self) -> None:
@@ -128,7 +145,7 @@ class HallSensorCounter(object):
             time.sleep(self.poll_interval_seconds)
 
     def poll_once(self) -> None:
-        """Read the digital input once and count state-change events."""
+        """Read the digital input once and count magnet-detected pulse edges."""
         if self.grovepi is None:
             return
 
@@ -151,16 +168,84 @@ class HallSensorCounter(object):
             if raw_value == self._previous_raw_value:
                 return
 
+            previous_raw_value = self._previous_raw_value
             self._previous_raw_value = raw_value
+
             if (
-                self._last_event_time is not None
-                and now - self._last_event_time < self.debounce_seconds
+                previous_raw_value == self.magnet_detected_state
+                or raw_value != self.magnet_detected_state
             ):
                 return
 
-            self._previous_event_time = self._last_event_time
-            self._last_event_time = now
-            self._event_count += 1
+            self._record_pulse(now)
+
+    def _record_pulse(self, now: float) -> None:
+        if (
+            self._last_event_time is not None
+            and now - self._last_event_time < self.debounce_seconds
+        ):
+            return
+
+        period_seconds = None  # type: Optional[float]
+        if self._last_event_time is not None:
+            period_seconds = now - self._last_event_time
+
+        if period_seconds is not None and period_seconds > self.timeout_seconds:
+            self._period_samples.clear()
+            self._consecutive_suspicious_intervals = 0
+            period_seconds = None
+
+        effective_period_seconds = self._effective_period_seconds(period_seconds)
+        if effective_period_seconds is not None:
+            self._period_samples.append(effective_period_seconds)
+            self._last_period_seconds = effective_period_seconds
+
+        self._previous_event_time = self._last_event_time
+        self._last_event_time = now
+        self._event_count += 1
+
+    def _effective_period_seconds(
+        self,
+        period_seconds: Optional[float],
+    ) -> Optional[float]:
+        if period_seconds is None or period_seconds <= 0:
+            return None
+
+        if not self._period_samples:
+            self._consecutive_suspicious_intervals = 0
+            return period_seconds
+
+        average_period_seconds = sum(self._period_samples) / len(self._period_samples)
+        if average_period_seconds <= 0:
+            self._consecutive_suspicious_intervals = 0
+            return period_seconds
+
+        if period_seconds < average_period_seconds * SUSPICIOUS_INTERVAL_FACTOR:
+            self._consecutive_suspicious_intervals = 0
+            return period_seconds
+
+        missed_pulse_count = int(round(period_seconds / average_period_seconds))
+        if missed_pulse_count < 2:
+            self._consecutive_suspicious_intervals = 0
+            return period_seconds
+
+        self._consecutive_suspicious_intervals += 1
+        if self._consecutive_suspicious_intervals == 1:
+            corrected_period_seconds = period_seconds / missed_pulse_count
+            if self.debug:
+                print(
+                    "{} D{} suspicious interval {:.3f}s corrected to {:.3f}s".format(
+                        self.label,
+                        self.port,
+                        period_seconds,
+                        corrected_period_seconds,
+                    )
+                )
+            return corrected_period_seconds
+
+        self._period_samples.clear()
+        self._consecutive_suspicious_intervals = 0
+        return period_seconds
 
     def _warn_once(self, message: str) -> None:
         if message == self._last_error:
@@ -179,7 +264,10 @@ class SpeedCadenceHallSensors(object):
         wheel_diameter_cm: float = 70.0,
         speed_magnets_per_rotation: int = 1,
         cadence_magnets_per_rotation: int = 1,
-        debounce_seconds: float = 0.25,
+        debounce_seconds: float = DEBOUNCE_SECONDS,
+        poll_interval_seconds: float = POLL_DELAY_SECONDS,
+        timeout_seconds: float = STOP_TIMEOUT_SECONDS,
+        average_window: int = AVERAGE_WINDOW,
         debug: bool = False,
         background_polling: bool = False,
     ) -> None:
@@ -191,6 +279,9 @@ class SpeedCadenceHallSensors(object):
             label="Speed",
             debounce_seconds=debounce_seconds,
             magnets_per_rotation=speed_magnets_per_rotation,
+            poll_interval_seconds=poll_interval_seconds,
+            timeout_seconds=timeout_seconds,
+            average_window=average_window,
             debug=debug,
             auto_start=background_polling,
         )
@@ -199,6 +290,9 @@ class SpeedCadenceHallSensors(object):
             label="Cadence",
             debounce_seconds=debounce_seconds,
             magnets_per_rotation=cadence_magnets_per_rotation,
+            poll_interval_seconds=poll_interval_seconds,
+            timeout_seconds=timeout_seconds,
+            average_window=average_window,
             debug=debug,
             auto_start=background_polling,
         )

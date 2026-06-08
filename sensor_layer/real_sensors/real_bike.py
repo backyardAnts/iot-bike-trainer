@@ -326,7 +326,6 @@ class RealBike(object):
                 wheel_diameter_cm=wheel_diameter_cm,
                 speed_magnets_per_rotation=speed_magnets_per_rotation,
                 cadence_magnets_per_rotation=cadence_magnets_per_rotation,
-                debounce_seconds=0.25,
                 debug=hall_debug,
                 background_polling=False,
             )
