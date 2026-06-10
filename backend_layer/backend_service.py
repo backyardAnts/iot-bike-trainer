@@ -1,4 +1,8 @@
-"""Backend coordination for MQTT messages stored in SQLite."""
+"""Backend coordination for MQTT messages stored in SQLite.
+
+BackendService is intentionally kept separate from MQTT callbacks so the same
+logic can be tested with plain payloads and fake publishers.
+"""
 
 from __future__ import annotations
 
@@ -40,12 +44,15 @@ class BackendService:
         heart_rate_timeout_seconds: float = DEFAULT_HEART_RATE_TIMEOUT_SECONDS,
         monotonic_clock: Any | None = None,
     ) -> None:
+        """Create the backend state used while MQTT messages are arriving."""
         self._uses_default_decision_engine = decision_engine is None
         self.decision_engine = decision_engine or DecisionEngine()
         self.heart_rate_timeout_seconds = float(heart_rate_timeout_seconds)
         self._clock = monotonic_clock or time.monotonic
+        # Watch readings are cached by bike/session and merged into sensor data.
         self._latest_heart_rates = {}  # type: dict[tuple[str, str], dict[str, Any]]
         self._latest_merged_sensor_message = None  # type: dict[str, Any] | None
+        # Session context carries athlete/profile data from status messages.
         self._session_context = {}  # type: dict[tuple[str, str], dict[str, Any]]
 
     def handle_sensor_message(
@@ -55,6 +62,7 @@ class BackendService:
     ) -> dict[str, Any] | None:
         """Validate, save, analyze, and return an optional feedback command."""
         self._latest_merged_sensor_message = None
+        # Payloads can arrive as bytes from paho or as strings in tests.
         payload_text = _payload_to_text(payload)
         message = _parse_json_object(payload_text)
 
@@ -66,9 +74,11 @@ class BackendService:
             print("Ignored invalid sensor payload: schema validation failed.")
             return None
 
+        # Use the latest watch heart rate if it is fresh for this session.
         message = self._merge_latest_heart_rate(message)
         self._latest_merged_sensor_message = dict(message)
 
+        # Save first so analytics still have raw data even if decision logic fails.
         save_sensor_reading(message)
         print(
             "Saved sensor reading "
@@ -89,6 +99,7 @@ class BackendService:
             f"| action={decision_data['recommended_action']}"
         )
         try:
+            # Keep the decision log tied to the same source topic for debugging.
             save_decision_log(message, decision, source_topic=source_topic)
             print(
                 f"Saved decision log: device={message['device_id']} "
@@ -107,6 +118,7 @@ class BackendService:
             return None
 
         message = dict(self._latest_merged_sensor_message)
+        # Merged sensor messages are published for real-mode consumers as well.
         message.setdefault("buzzer_state", False)
         message.setdefault("led_state", False)
         return message
@@ -126,6 +138,7 @@ class BackendService:
             return False
 
         key = (reading["device_id"], reading["session_id"])
+        # monotonic time is used for freshness because wall-clock time can jump.
         self._latest_heart_rates[key] = {
             **reading,
             "received_at_monotonic": self._clock(),
@@ -149,6 +162,7 @@ class BackendService:
         status_message = _parse_json_object(payload_text)
         if status_message is None:
             return None
+        # Status messages can include athlete details before readings arrive.
         self._cache_session_context_from_status(status_message)
         session_payload = build_session_status_payload(status_message)
         if session_payload is None:
@@ -156,6 +170,7 @@ class BackendService:
 
         self._update_session_record_from_status(session_payload)
         if session_payload["status"] == "stopped":
+            # The report function handles its own duplicate guard.
             self._send_stopped_session_report(session_payload)
         return session_payload
 
@@ -167,6 +182,7 @@ class BackendService:
         save_command(command_payload if command_payload is not None else payload_text)
 
         if command_payload is None:
+            # Keep malformed commands for audit/debugging, but do not act on them.
             print(f"Saved non-JSON command payload: {payload_text}")
             return
 
@@ -179,6 +195,7 @@ class BackendService:
         print(f"Saved command message: {command or 'UNKNOWN'}")
 
     def _start_session_from_command(self, command_payload: dict[str, Any]) -> None:
+        """Create a started session row from a command payload."""
         session_id = str(command_payload.get("session_id", DEFAULT_SESSION_ID))
         device_id = str(command_payload.get("device_id", DEVICE_ID))
         start_time = str(command_payload.get("timestamp", get_current_timestamp()))
@@ -205,6 +222,7 @@ class BackendService:
         print(f"Started session record: {session_id}")
 
     def _stop_session_from_command(self, command_payload: dict[str, Any]) -> None:
+        """Stop a session row from a command payload."""
         session_id = str(command_payload.get("session_id", DEFAULT_SESSION_ID))
         end_time = str(command_payload.get("timestamp", get_current_timestamp()))
         athlete_id = _parse_optional_int(
@@ -214,6 +232,7 @@ class BackendService:
         print(f"Stopped session record: {session_id}")
 
     def _update_session_record_from_status(self, session_payload: dict[str, Any]) -> None:
+        """Apply active/stopped status payloads to the sessions table."""
         session_id = str(session_payload["session_id"])
         timestamp = str(session_payload["timestamp"])
         athlete = session_payload.get("athlete")
@@ -235,6 +254,7 @@ class BackendService:
         _call_stop_session(session_id, timestamp, athlete_id=athlete_id)
 
     def _send_stopped_session_report(self, session_payload: dict[str, Any]) -> None:
+        """Generate a stopped-session report without crashing the MQTT loop."""
         try:
             process_stopped_session_report(session_payload)
         except Exception as exc:
@@ -244,6 +264,7 @@ class BackendService:
             )
 
     def _decide_feedback(self, message: dict[str, Any]) -> DecisionResult:
+        """Run feedback logic with the best rider profile available."""
         if not self._uses_default_decision_engine and not isinstance(
             self.decision_engine,
             DecisionEngine,
@@ -259,6 +280,7 @@ class BackendService:
         return self.decision_engine.analyze(message)
 
     def _cache_session_context_from_status(self, status_message: dict[str, Any]) -> None:
+        """Remember athlete/workout context from started or stopped statuses."""
         status = str(status_message.get("status", "")).strip().lower()
         if status not in {"started", "stopped"}:
             return
@@ -287,6 +309,7 @@ class BackendService:
             self._session_context[(device_id, session_id)] = context
 
     def _rider_profile_for_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
+        """Build a rider profile for heart-rate decisions from stored context."""
         key = (str(message["device_id"]), str(message["session_id"]))
         context = self._session_context.get(key)
         athlete = _athlete_from_context(context)
@@ -339,6 +362,7 @@ class BackendService:
         self,
         session_payload: dict[str, Any],
     ) -> None:
+        """Persist athlete/session metadata when a payload contains it."""
         athlete = session_payload.get("athlete")
         athlete_id = _parse_optional_int(
             session_payload.get("athlete_id") or session_payload.get("user_id")
@@ -362,6 +386,7 @@ class BackendService:
             )
 
     def _merge_latest_heart_rate(self, message: dict[str, Any]) -> dict[str, Any]:
+        """Merge fresh watch heart rate into a bike sensor message."""
         key = (str(message["device_id"]), str(message["session_id"]))
         latest = self._latest_heart_rates.get(key)
         if latest is None:
@@ -382,12 +407,14 @@ class BackendService:
 
 
 def _payload_to_text(payload: str | bytes) -> str:
+    """Decode MQTT payload bytes into text for JSON parsing."""
     if isinstance(payload, bytes):
         return payload.decode("utf-8", errors="replace")
     return str(payload)
 
 
 def _parse_json_object(payload: str) -> dict[str, Any] | None:
+    """Parse JSON text and accept only objects."""
     try:
         parsed = json.loads(payload)
     except json.JSONDecodeError:
@@ -401,6 +428,7 @@ def build_session_status_payload(
 ) -> dict[str, Any] | None:
     """Return a retained session-topic payload for started/stopped bike status."""
     status = str(status_message.get("status", "")).strip().lower()
+    # "ready" is a device heartbeat, not a session state.
     if status == "ready":
         return None
     if status not in {"started", "stopped"}:
@@ -412,6 +440,7 @@ def build_session_status_payload(
 
     device_id = _non_empty_string(status_message.get("device_id"))
     if status == "started":
+        # Started payloads must identify this device before they are retained.
         if device_id != DEVICE_ID:
             return None
     elif device_id is None:
@@ -443,6 +472,7 @@ def build_session_status_payload(
 
 
 def _non_empty_string(value: Any) -> str | None:
+    """Return stripped text, or None for blank values."""
     if value is None:
         return None
 
@@ -451,6 +481,7 @@ def _non_empty_string(value: Any) -> str | None:
 
 
 def _clean_athlete(value: Any) -> dict[str, Any]:
+    """Keep only athlete fields the backend knows how to store."""
     if not isinstance(value, dict):
         return {}
 
@@ -482,6 +513,7 @@ def _clean_athlete(value: Any) -> dict[str, Any]:
 
 
 def _athlete_from_context(context: dict[str, Any] | None) -> dict[str, Any]:
+    """Extract a copy of the cached athlete dictionary."""
     if not context:
         return {}
     athlete = context.get("athlete")
@@ -492,6 +524,7 @@ def _load_stored_athlete_for_context(
     message: dict[str, Any],
     athlete: dict[str, Any],
 ) -> dict[str, Any] | None:
+    """Find a stored athlete using context IDs or the current session."""
     athlete_id = _parse_optional_int(
         athlete.get("athlete_id") or athlete.get("user_id") or athlete.get("id")
     )
@@ -504,6 +537,7 @@ def _load_stored_athlete_for_context(
 
 
 def _safe_get_athlete_by_id(athlete_id: int) -> dict[str, Any] | None:
+    """Load an athlete row, returning None if storage is not ready."""
     try:
         return get_athlete_by_id(athlete_id)
     except Exception:
@@ -514,6 +548,7 @@ def _safe_get_athlete_for_session(
     session_id: str,
     device_id: str | None = None,
 ) -> dict[str, Any] | None:
+    """Load a session athlete, returning None if storage is not ready."""
     try:
         return get_athlete_for_session(session_id, device_id=device_id)
     except Exception:
@@ -527,6 +562,7 @@ def _call_start_session(
     athlete_id: int | None = None,
     athlete: dict[str, Any] | None = None,
 ) -> None:
+    """Call start_session while staying compatible with older signatures."""
     if _callable_accepts_keywords(start_session, {"athlete_id", "athlete"}):
         start_session(
             session_id,
@@ -544,6 +580,7 @@ def _call_stop_session(
     end_time: str,
     athlete_id: int | None = None,
 ) -> None:
+    """Call stop_session while staying compatible with older signatures."""
     if _callable_accepts_keywords(stop_session, {"athlete_id"}):
         stop_session(session_id, end_time, athlete_id=athlete_id)
         return
@@ -551,6 +588,7 @@ def _call_stop_session(
 
 
 def _callable_accepts_keywords(callable_object: Any, keywords: set[str]) -> bool:
+    """Return True when a callable can accept any of the given keyword args."""
     try:
         signature = inspect.signature(callable_object)
     except (TypeError, ValueError):
@@ -564,6 +602,7 @@ def _callable_accepts_keywords(callable_object: Any, keywords: set[str]) -> bool
 
 
 def _parse_positive_int(value: Any) -> int | None:
+    """Parse a positive integer, rejecting booleans and bad values."""
     if isinstance(value, bool):
         return None
     try:
@@ -574,10 +613,12 @@ def _parse_positive_int(value: Any) -> int | None:
 
 
 def _parse_optional_int(value: Any) -> int | None:
+    """Parse an optional positive integer ID."""
     return _parse_positive_int(value)
 
 
 def _parse_positive_float(value: Any, default: Any) -> float:
+    """Parse a positive float, falling back to the provided default."""
     if isinstance(value, bool):
         return float(default)
     try:
@@ -589,6 +630,7 @@ def _parse_positive_float(value: Any, default: Any) -> float:
 
 def parse_heart_rate_message(message: dict[str, Any]) -> dict[str, Any] | None:
     """Return a validated heart-rate reading, or None when invalid."""
+    # Keep this strict because watch data is merged into trusted sensor rows.
     if not isinstance(message, dict):
         return None
 
@@ -620,6 +662,7 @@ def parse_heart_rate_message(message: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _parse_heart_rate_bpm(value: Any) -> int | None:
+    """Parse a plausible watch heart-rate value."""
     if isinstance(value, bool):
         return None
 
@@ -638,6 +681,7 @@ def _parse_heart_rate_bpm(value: Any) -> int | None:
 def build_feedback_command(decision: DecisionResult | dict[str, Any]) -> dict[str, Any]:
     """Build an MQTT command payload from a decision result."""
     decision_data = _decision_to_dict(decision)
+    # The bike command handler expects this command name for rider feedback.
     command = {
         "command": "update_feedback",
         "display_active": decision_data["display_active"],
@@ -661,6 +705,7 @@ def build_feedback_command(decision: DecisionResult | dict[str, Any]) -> dict[st
         "heart_rate_bpm",
         "hr_percent",
     ):
+        # Pass through hardware-specific fields when the decision includes them.
         if key == "hr_percent" and decision_data.get(key) is None:
             continue
         if key in decision_data:
@@ -669,6 +714,7 @@ def build_feedback_command(decision: DecisionResult | dict[str, Any]) -> dict[st
 
 
 def _decision_to_dict(decision: DecisionResult | dict[str, Any]) -> dict[str, Any]:
+    """Accept both dataclass decisions and already-built dictionaries."""
     if isinstance(decision, dict):
         return decision
     return decision.to_dict()

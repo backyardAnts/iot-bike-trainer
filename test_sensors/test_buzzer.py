@@ -1,4 +1,8 @@
-"""Simple GrovePi buzzer test for D7."""
+"""Simple GrovePi buzzer test for D7.
+
+Use this script before running the full bike loop to make sure the buzzer is
+wired to the expected digital port.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ DEFAULT_PORT = 7
 DEFAULT_ON_TIME_SECONDS = 0.5
 DEFAULT_OFF_TIME_SECONDS = 0.5
 GROVEPI_PATHS = (
+    # Common GrovePi install paths on the Raspberry Pi image.
     "/home/pi/Dexter/GrovePi/Software/Python",
     "/home/pi/Dexter/GrovePi/Software/Python/grovepi",
 )
@@ -24,6 +29,7 @@ def import_grovepi() -> Any:
 
         return grovepi
     except ImportError:
+        # Try the paths used by the standard Dexter GrovePi installation.
         for path in GROVEPI_PATHS:
             if path not in sys.path:
                 sys.path.append(path)
@@ -59,6 +65,7 @@ def safe_write(grovepi: Any, port: int, value: int) -> bool:
 
 
 def main() -> None:
+    """Blink the buzzer on and off until Ctrl+C."""
     parser = argparse.ArgumentParser(description="Test GrovePi buzzer.")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--on-time", type=float, default=DEFAULT_ON_TIME_SECONDS)
@@ -71,6 +78,7 @@ def main() -> None:
 
     try:
         while True:
+            # The loop is simple on purpose: if it toggles, the wiring works.
             if safe_write(grovepi, args.port, 1):
                 print("BUZZER D{}: ON".format(args.port))
             time.sleep(args.on_time)
@@ -81,6 +89,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nStopping buzzer test.")
     finally:
+        # Leave the buzzer off even if the user stops during the ON half-cycle.
         safe_write(grovepi, args.port, 0)
         print("BUZZER D{}: OFF".format(args.port))
 

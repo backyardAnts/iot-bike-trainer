@@ -1,4 +1,8 @@
-"""Tests for MQTT command payload parsing."""
+"""Tests for MQTT command payload parsing.
+
+The command handler receives bytes from MQTT but tests also pass dictionaries,
+so these cases lock down every accepted payload shape.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,8 @@ from mqtt_layer.subscriber import MqttCommandSubscriber
 
 
 class CommandPayloadParserTest(unittest.TestCase):
+    """Parser and subscriber tests for dashboard command payloads."""
+
     def test_parse_command_payload_accepts_bytes(self) -> None:
         payload = _start_payload_text().encode("utf-8")
 
@@ -54,6 +60,8 @@ class CommandPayloadParserTest(unittest.TestCase):
 
 
 class _FakeDashboardBike:
+    """Small bike double that records a started workout."""
+
     def __init__(self) -> None:
         self.device_id = "bike_001"
         self.session_id = ""
@@ -80,6 +88,8 @@ class _FakeDashboardBike:
 
 
 class _FakeClient:
+    """MQTT client double that reports successful subscriptions."""
+
     def subscribe(self, topic: str) -> tuple[int, int]:
         return (0, 1)
 
@@ -88,12 +98,15 @@ class _FakeClient:
 
 
 class _FakeMqttMessage:
+    """Minimal paho-style message object used by subscriber tests."""
+
     def __init__(self, topic: str, payload: bytes) -> None:
         self.topic = topic
         self.payload = payload
 
 
 def _start_payload_text() -> str:
+    """Return a compact JSON command that starts a real workout."""
     return json.dumps(
         {
             "command": "start_workout",

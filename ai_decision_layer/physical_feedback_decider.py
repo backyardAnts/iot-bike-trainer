@@ -1,4 +1,8 @@
-"""Physical bike feedback decisions for GrovePi hardware mode."""
+"""Physical bike feedback decisions for GrovePi hardware mode.
+
+This module preserves the real-bike side-warning behavior and packages it in a
+shape that the shared decision engine can understand.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +21,8 @@ SAFE_ALERT_DISTANCE_CM = 999.0
 
 def decide_physical_feedback(sensor_data: dict[str, Any]) -> dict[str, Any]:
     """Return the original real-controller side warning feedback decision."""
+    # Distances arrive in meters from normalized messages but the original
+    # hardware rule is written in centimeters.
     left_cm = _distance_to_alert_cm(sensor_data.get("left_distance_m"))
     right_cm = _distance_to_alert_cm(sensor_data.get("right_distance_m"))
     left_close = left_cm < PHYSICAL_WARNING_THRESHOLD_CM
@@ -24,6 +30,8 @@ def decide_physical_feedback(sensor_data: dict[str, Any]) -> dict[str, Any]:
     workout_type = str(sensor_data.get("workout_type", ""))
 
     if left_close and right_close:
+        # Objects on both sides are treated as danger because there is no safe
+        # side for the rider to move toward.
         return _with_heart_rate_fields(
             _feedback(
                 alert_level="danger",
@@ -41,6 +49,7 @@ def decide_physical_feedback(sensor_data: dict[str, Any]) -> dict[str, Any]:
         )
 
     if left_close:
+        # Single-side warnings keep the side in every display/speaker field.
         return _with_heart_rate_fields(
             _feedback(
                 alert_level="warning",
@@ -108,6 +117,7 @@ def _feedback(
     recommended_action: str,
     workout_type: str,
 ) -> dict[str, Any]:
+    """Build the command-style feedback dictionary used by real bike mode."""
     return {
         "command": "update_feedback",
         "alert_state": alert_level,
@@ -130,12 +140,14 @@ def _feedback(
 
 
 def _distance_to_alert_cm(value: Any) -> float:
+    """Convert meters to centimeters, using a safe far-away value on bad input."""
     try:
         distance_m = float(value)
     except (TypeError, ValueError):
         return SAFE_ALERT_DISTANCE_CM
 
     if distance_m < 0:
+        # Negative distances are sensor noise, not real nearby objects.
         return SAFE_ALERT_DISTANCE_CM
     return distance_m * 100.0
 
@@ -144,6 +156,7 @@ def _with_heart_rate_fields(
     feedback: dict[str, Any],
     sensor_data: dict[str, Any],
 ) -> dict[str, Any]:
+    """Add heart-rate details when the sensor message includes usable HR data."""
     value = sensor_data.get("heart_rate_bpm")
     if not is_heart_rate_available(value):
         feedback["heart_rate_bpm"] = 0

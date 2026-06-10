@@ -1,4 +1,8 @@
-"""Write MQTT backend data into SQLite."""
+"""Write MQTT backend data into SQLite.
+
+This module is the write side of the local database layer. It accepts validated
+payloads from the backend and keeps athlete/session links consistent.
+"""
 
 from __future__ import annotations
 
@@ -33,6 +37,7 @@ def create_athlete_account(
     training_goal: str | None = None,
 ) -> dict[str, Any]:
     """Create or update one athlete account and return the stored row."""
+    # Accept either a raw password or a precomputed hash for tests/imports.
     athlete_data = {
         "name": name,
         "email": email,
@@ -84,6 +89,7 @@ def update_athlete_profile(
     **profile_updates: Any,
 ) -> dict[str, Any] | None:
     """Update supported athlete profile fields and return the updated account."""
+    # Ignore unknown fields so callers can pass larger profile payloads safely.
     allowed_fields = {
         "name",
         "email",
@@ -140,6 +146,7 @@ def get_or_create_legacy_athlete() -> dict[str, Any]:
 
 def hash_password(password: str) -> str:
     """Hash a password with PBKDF2-SHA256 for lightweight login support."""
+    # The salt is stored with the hash so each password has a unique digest.
     salt = os.urandom(16)
     digest = hashlib.pbkdf2_hmac(
         "sha256",
@@ -171,6 +178,7 @@ def verify_password(password: str, stored_hash: str) -> bool:
         salt,
         iterations,
     )
+    # compare_digest avoids leaking timing clues for wrong passwords.
     return hmac.compare_digest(actual_digest, expected_digest)
 
 
@@ -256,6 +264,7 @@ def save_sensor_reading(
     received_at = get_current_timestamp()
 
     with get_db_connection() as connection:
+        # Every reading should be linked to an athlete, even legacy/demo data.
         resolved_athlete_id = _resolve_athlete_id_for_session(
             connection,
             str(message["session_id"]),
@@ -310,6 +319,7 @@ def save_status_message(topic: str, payload: str) -> None:
     """Save a raw MQTT status message."""
     parsed_payload = _parse_json_object(str(payload))
     with get_db_connection() as connection:
+        # Raw payload is stored either way; parsed fields are used when present.
         session_id = _optional_text(
             parsed_payload.get("session_id") if parsed_payload else None
         )
@@ -347,6 +357,7 @@ def save_command(payload: dict[str, Any] | str) -> None:
     command = None
 
     if isinstance(payload, dict):
+        # Store JSON compactly so command history is readable and searchable.
         command = _extract_command(payload)
         payload_text = json.dumps(payload, separators=(",", ":"))
         command_payload = payload
@@ -410,6 +421,7 @@ def save_session_metadata(
     if not session_id:
         return
 
+    # Keep the full athlete object while also splitting useful fields into columns.
     athlete_data = dict(athlete) if isinstance(athlete, dict) else {}
     now = get_current_timestamp()
     athlete_json = json.dumps(athlete_data, separators=(",", ":"), sort_keys=True)
@@ -433,6 +445,7 @@ def save_session_metadata(
             device_id,
             resolved_athlete_id,
         )
+        # Upsert lets repeated START/status messages refresh the same session row.
         connection.execute(
             """
             INSERT INTO session_metadata (
@@ -502,6 +515,7 @@ def save_decision_log(
     decision_data = _decision_to_dict(decision)
 
     with get_db_connection() as connection:
+        # Resolve the same athlete as the sensor reading so reports line up.
         resolved_athlete_id = _resolve_athlete_id_for_session(
             connection,
             str(sensor_message.get("session_id", "")),
@@ -532,6 +546,7 @@ def save_decision_log(
 def save_session_analytics(analytics: dict[str, Any]) -> None:
     """Save one calculated session analytics summary."""
     with get_db_connection() as connection:
+        # Saved summaries are tied back to the athlete for dashboard filtering.
         athlete_id = _resolve_athlete_id_for_session(
             connection,
             str(analytics["session_id"]),
@@ -612,6 +627,7 @@ def reserve_session_report_email(
                 (resolved_athlete_id, session_id, workout_type, subject, body, now),
             )
     except sqlite3.IntegrityError:
+        # session_id is unique here; an integrity error means it was reserved.
         return False
 
     return True
@@ -668,6 +684,7 @@ def start_session(
         ).fetchone()
 
         if active_session is not None:
+            # Restarting an active session refreshes the row instead of duplicating it.
             connection.execute(
                 """
                 UPDATE sessions
@@ -730,6 +747,7 @@ def stop_session(
 
 def initialize_default_settings() -> None:
     """Insert default threshold settings if they do not already exist."""
+    # These become editable settings for later dashboard work.
     now = get_current_timestamp()
     defaults = {
         "danger_distance_m": thresholds.DANGER_DISTANCE_M,
@@ -791,11 +809,13 @@ def save_alert(alert: dict[str, Any]) -> None:
 
 
 def _extract_command(payload: dict[str, Any]) -> str | None:
+    """Return the normalized command name from a payload."""
     command = payload.get("command")
     return str(command).strip().upper() if command else None
 
 
 def _decision_to_dict(decision: Any) -> dict[str, Any]:
+    """Accept either a decision dictionary or an object with to_dict()."""
     if isinstance(decision, dict):
         return decision
 
@@ -808,6 +828,7 @@ def _decision_to_dict(decision: Any) -> dict[str, Any]:
 
 
 def _parse_json_object(payload: str) -> dict[str, Any] | None:
+    """Parse JSON text and accept only objects."""
     try:
         parsed = json.loads(payload)
     except json.JSONDecodeError:
@@ -817,6 +838,7 @@ def _parse_json_object(payload: str) -> dict[str, Any] | None:
 
 
 def _optional_text(value: Any) -> str | None:
+    """Return stripped text, or None for blank values."""
     if value is None:
         return None
     text = str(value).strip()
@@ -824,6 +846,7 @@ def _optional_text(value: Any) -> str | None:
 
 
 def _optional_int(value: Any) -> int | None:
+    """Parse an integer, returning None for bad values and booleans."""
     if isinstance(value, bool):
         return None
     try:
@@ -833,6 +856,7 @@ def _optional_int(value: Any) -> int | None:
 
 
 def _optional_float(value: Any) -> float | None:
+    """Parse a float, returning None for bad values and booleans."""
     if isinstance(value, bool):
         return None
     try:
@@ -849,6 +873,7 @@ def _resolve_athlete_id_for_session(
     athlete: dict[str, Any] | None = None,
     create_legacy: bool = False,
 ) -> int | None:
+    """Resolve the best athlete ID for a session-related write."""
     explicit_athlete_id = _valid_athlete_id(connection, athlete_id)
     if explicit_athlete_id is not None:
         return explicit_athlete_id
@@ -870,6 +895,7 @@ def _resolve_athlete_id_for_session(
         return _create_or_update_athlete(connection, athlete_data)
 
     if create_legacy:
+        # Legacy athlete keeps old/no-profile data queryable by athlete filters.
         return ensure_legacy_athlete(connection)
 
     return None
@@ -879,6 +905,7 @@ def _athlete_id_from_payload(
     connection: sqlite3.Connection,
     payload: dict[str, Any],
 ) -> int | None:
+    """Resolve athlete ID from command/status payload fields."""
     athlete_id = _valid_athlete_id(
         connection,
         _optional_int(payload.get("athlete_id") or payload.get("user_id")),
@@ -903,6 +930,7 @@ def _athlete_id_from_profile(
     connection: sqlite3.Connection,
     athlete: dict[str, Any],
 ) -> int | None:
+    """Resolve an athlete ID from an embedded athlete profile."""
     athlete_id = _valid_athlete_id(
         connection,
         _optional_int(
@@ -927,6 +955,7 @@ def _create_or_update_athlete(
     connection: sqlite3.Connection,
     athlete: dict[str, Any],
 ) -> int:
+    """Create or update an athlete row and return its ID."""
     athlete_id = _valid_athlete_id(
         connection,
         _optional_int(
@@ -1016,6 +1045,7 @@ def _update_athlete_row(
     athlete_id: int,
     athlete: dict[str, Any],
 ) -> None:
+    """Update an existing athlete row with any supplied profile fields."""
     updates = {
         "name": _non_empty_text(athlete.get("name")),
         "email": _normalize_email(athlete.get("email")),
@@ -1051,6 +1081,7 @@ def _athlete_values(
     athlete: dict[str, Any],
     now: str,
 ) -> tuple[Any, ...]:
+    """Build the ordered athlete values used by INSERT statements."""
     return (
         name,
         email,
@@ -1072,6 +1103,7 @@ def _find_athlete_id_for_session(
     session_id: str,
     device_id: str | None = None,
 ) -> int | None:
+    """Find an athlete already linked to this session in known tables."""
     session_id = str(session_id).strip()
     if not session_id:
         return None
@@ -1118,6 +1150,7 @@ def _link_session_to_athlete(
     device_id: str,
     athlete_id: int | None,
 ) -> None:
+    """Backfill athlete_id into rows that belong to a session."""
     if athlete_id is None:
         return
     connection.execute(
@@ -1145,6 +1178,7 @@ def _valid_athlete_id(
     connection: sqlite3.Connection,
     athlete_id: int | None,
 ) -> int | None:
+    """Return athlete_id only when it exists in the athletes table."""
     if athlete_id is None:
         return None
     row = connection.execute(
@@ -1163,6 +1197,7 @@ def _get_athlete_by_id(
     connection: sqlite3.Connection,
     athlete_id: int | str,
 ) -> dict[str, Any] | None:
+    """Load an athlete row by ID, guarding against bad input."""
     try:
         athlete_id_int = int(athlete_id)
     except (TypeError, ValueError):
@@ -1180,6 +1215,7 @@ def _get_athlete_by_id(
 
 
 def _has_athlete_profile_data(athlete: dict[str, Any]) -> bool:
+    """Return True when a payload has enough data to create an athlete row."""
     for key in (
         "name",
         "email",
@@ -1197,13 +1233,16 @@ def _has_athlete_profile_data(athlete: dict[str, Any]) -> bool:
 
 
 def _normalize_email(value: Any) -> str | None:
+    """Normalize email text for comparisons and unique constraints."""
     text = _optional_text(value)
     return text.lower() if text is not None else None
 
 
 def _non_empty_text(value: Any) -> str | None:
+    """Alias used where text-specific intent reads better than optional_text."""
     return _optional_text(value)
 
 
 def _safe_limit(limit: int) -> int:
+    """Keep query limits positive."""
     return max(1, int(limit))

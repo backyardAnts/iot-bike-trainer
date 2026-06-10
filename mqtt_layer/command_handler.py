@@ -1,4 +1,9 @@
-"""Handle MQTT command messages for virtual and real bike feedback."""
+"""Handle MQTT command messages for virtual and real bike feedback.
+
+Commands can update rider feedback, start/stop workouts, or perform small
+hardware checks. The handler accepts both old command names and newer feedback
+payloads so existing clients keep working.
+"""
 
 from __future__ import annotations
 
@@ -31,6 +36,7 @@ class CommandHandler:
     """Parse and apply supported commands received over MQTT."""
 
     def __init__(self, bike: Any, defer_application: bool = False) -> None:
+        """Store the target bike object and decide whether commands are queued."""
         self.bike = bike
         self.defer_application = bool(defer_application)
         self._pending_command = None  # type: dict[str, Any] | None
@@ -51,6 +57,7 @@ class CommandHandler:
             }
 
         command = str(command_data.get("command", "")).strip().upper()
+        # Device-specific commands should not affect other bikes on the same broker.
         if not self._is_for_this_device(command_data):
             return self._result(
                 True,
@@ -60,6 +67,7 @@ class CommandHandler:
                 device_id=command_data.get("device_id"),
             )
         if self.defer_application:
+            # Real hardware applies commands from the main loop to avoid races.
             return self._queue_command(command, command_data)
 
         return self.apply_command(command_data)
@@ -118,6 +126,7 @@ class CommandHandler:
             return self._result(True, command, "Speaker message updated")
 
         if command in {"SET_FEEDBACK", "UPDATE_FEEDBACK"}:
+            # Physical feedback commands include LCD/buzzer/LED fields.
             if self._is_physical_feedback_command(command_data):
                 self._apply_physical_feedback(command_data)
             else:
@@ -174,6 +183,7 @@ class CommandHandler:
         command: str,
         command_data: dict[str, Any],
     ) -> dict[str, Any]:
+        """Store one command for the main loop to apply later."""
         if command not in SUPPORTED_COMMANDS:
             return self._result(False, command or "UNKNOWN", "Unsupported command")
 
@@ -193,6 +203,7 @@ class CommandHandler:
         )
 
     def _apply_feedback(self, command_data: dict[str, Any]) -> None:
+        """Apply generic display/speaker/alert feedback to the bike."""
         display_active = command_data.get("display_active")
         display_message = command_data.get(
             "display_message",
@@ -219,6 +230,7 @@ class CommandHandler:
         )
 
     def _apply_physical_feedback(self, command_data: dict[str, Any]) -> None:
+        """Apply hardware-specific feedback when the bike supports it."""
         if hasattr(self.bike, "apply_physical_feedback_command"):
             self.bike.apply_physical_feedback_command(command_data)
             return
@@ -226,6 +238,7 @@ class CommandHandler:
         self._apply_feedback(command_data)
 
     def _is_physical_feedback_command(self, command_data: dict[str, Any]) -> bool:
+        """Return True when a command contains real-hardware feedback fields."""
         physical_keys = {
             "alert_state",
             "warning_side",
@@ -237,6 +250,7 @@ class CommandHandler:
         return any(key in command_data for key in physical_keys)
 
     def _is_for_this_device(self, command_data: dict[str, Any]) -> bool:
+        """Return True when the command is broadcast or addressed to this bike."""
         command_device_id = command_data.get("device_id")
         if command_device_id is None or str(command_device_id).strip() == "":
             return True
@@ -251,6 +265,7 @@ class CommandHandler:
         command: str,
         command_data: dict[str, Any],
     ) -> dict[str, Any]:
+        """Start a workout/session on bike objects with different APIs."""
         if self._is_workout_active():
             return self._result(
                 True,
@@ -296,6 +311,7 @@ class CommandHandler:
         )
 
     def _stop_workout(self, command: str) -> dict[str, Any]:
+        """Stop a workout/session on bike objects with different APIs."""
         if not self._is_workout_active():
             return self._result(
                 True,
@@ -333,6 +349,7 @@ class CommandHandler:
         command: str,
         command_data: dict[str, Any],
     ) -> dict[str, Any]:
+        """Run a short buzzer check when the bike has buzzer support."""
         duration_seconds = _coerce_float(command_data.get("duration_seconds"), 0.2)
         if hasattr(self.bike, "test_buzzer"):
             self.bike.test_buzzer(duration_seconds)
@@ -350,6 +367,7 @@ class CommandHandler:
         command: str,
         command_data: dict[str, Any],
     ) -> dict[str, Any]:
+        """Switch bike mode when the target object supports it."""
         mode = str(command_data.get("mode", "")).strip()
         if not mode:
             return self._result(False, command, "Missing mode", status="invalid")
@@ -371,6 +389,7 @@ class CommandHandler:
         )
 
     def _is_workout_active(self) -> bool:
+        """Read active state across virtual, real, and fake bike objects."""
         if hasattr(self.bike, "is_session_active"):
             return bool(self.bike.is_session_active())
         if hasattr(self.bike, "workout_active"):
@@ -384,6 +403,7 @@ class CommandHandler:
         message: str,
         **extra: Any,
     ) -> dict[str, Any]:
+        """Build the standard command result payload."""
         result = {
             "ok": ok,
             "command": command,
@@ -394,6 +414,7 @@ class CommandHandler:
 
 
 def _coerce_float(value: Any, default: float) -> float:
+    """Convert a command value to float with a fallback."""
     if isinstance(value, bool):
         return default
     try:
@@ -406,6 +427,7 @@ def parse_command_payload(
     payload: str | bytes | bytearray | dict[str, Any],
 ) -> dict[str, Any]:
     """Parse one MQTT command payload into a dictionary."""
+    # Tests can pass dictionaries directly; MQTT normally passes bytes.
     if isinstance(payload, dict):
         return payload
 

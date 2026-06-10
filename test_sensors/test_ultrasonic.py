@@ -1,4 +1,8 @@
-"""Simple GrovePi ultrasonic sensor test for D5 and D6."""
+"""Simple GrovePi ultrasonic sensor test for D5 and D6.
+
+Run this before the full bike loop to check whether each side sensor returns
+valid distances in centimeters.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ LEFT_PORT = 5
 RIGHT_PORT = 6
 READ_INTERVAL_SECONDS = 0.5
 GROVEPI_PATHS = (
+    # Common GrovePi install paths on the Raspberry Pi image.
     "/home/pi/Dexter/GrovePi/Software/Python",
     "/home/pi/Dexter/GrovePi/Software/Python/grovepi",
 )
@@ -23,6 +28,7 @@ def import_grovepi() -> Any:
 
         return grovepi
     except ImportError:
+        # Try the paths used by the standard Dexter GrovePi installation.
         for path in GROVEPI_PATHS:
             if path not in sys.path:
                 sys.path.append(path)
@@ -62,6 +68,7 @@ def clean_distance_cm(value: Any) -> Optional[int]:
     if distance_cm <= 0:
         return None
     if distance_cm == 65535:
+        # Grove ultrasonic sensors often use 65535 as an out-of-range value.
         return None
     if distance_cm > 400:
         return None
@@ -84,11 +91,13 @@ def format_reading(label: str, port: int, distance_cm: Optional[int]) -> str:
 
 
 def main() -> None:
+    """Print left and right ultrasonic distances until Ctrl+C."""
     grovepi = import_grovepi()
     print("Testing GrovePi ultrasonic sensors. Press Ctrl+C to stop.")
 
     try:
         while True:
+            # Read both sides every half second so hand tests are easy to follow.
             left_cm = read_distance_cm(grovepi, LEFT_PORT)
             right_cm = read_distance_cm(grovepi, RIGHT_PORT)
 

@@ -1,4 +1,8 @@
-"""Tests for stopped-session analytics and email reporting."""
+"""Tests for stopped-session analytics and email reporting.
+
+The report code touches storage, analytics, duplicate email guards, and email
+template generation, so these tests use a temporary SQLite database.
+"""
 
 from __future__ import annotations
 
@@ -27,7 +31,10 @@ from database_layer.db_connection import SCHEMA_PATH
 
 
 class SessionReportTest(unittest.TestCase):
+    """End-to-end report tests against a temporary database."""
+
     def setUp(self) -> None:
+        """Create a fresh database and patch report/storage connections."""
         self.temp_dir = tempfile.TemporaryDirectory()
         self.database_path = Path(self.temp_dir.name) / "session_report_test.db"
         with self._connect() as connection:
@@ -39,6 +46,7 @@ class SessionReportTest(unittest.TestCase):
         sqlite_storage.get_db_connection = self._connect
 
     def tearDown(self) -> None:
+        """Restore patched database connections and delete temp files."""
         session_report.get_db_connection = self.original_report_connection
         sqlite_storage.get_db_connection = self.original_storage_connection
         self.temp_dir.cleanup()
@@ -435,6 +443,7 @@ class SessionReportTest(unittest.TestCase):
         self.assertEqual(report["performance"]["top_heart_rate_bpm"], 0)
 
     def _connect(self) -> sqlite3.Connection:
+        """Open the temporary report test database."""
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
         return connection
@@ -446,7 +455,9 @@ class SessionReportTest(unittest.TestCase):
         readings: list[tuple[object, ...]],
         athlete_id: int | None = None,
     ) -> None:
+        """Insert one synthetic session with matching sensor and decision rows."""
         if readings:
+            # The first reading timestamp is used as the session start time.
             sqlite_storage.start_session(
                 session_id,
                 "bike_001",
@@ -454,6 +465,7 @@ class SessionReportTest(unittest.TestCase):
                 athlete_id=athlete_id,
             )
         for index, reading in enumerate(readings):
+            # Tuple layout keeps test data compact while still allowing warnings.
             timestamp = str(reading[0])
             speed_kmh = float(reading[1])
             cadence_rpm = int(reading[2])

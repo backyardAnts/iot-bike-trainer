@@ -1,4 +1,8 @@
-"""Safe GrovePi and Grove LCD imports for Raspberry Pi hardware mode."""
+"""Safe GrovePi and Grove LCD imports for Raspberry Pi hardware mode.
+
+The code can be imported on a laptop without GrovePi installed; hardware
+classes check these helpers and disable themselves cleanly when needed.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 
 GROVEPI_PATHS = (
+    # Common install paths from Dexter's GrovePi setup on Raspberry Pi.
     "/home/pi/Dexter/GrovePi/Software/Python",
     "/home/pi/Dexter/GrovePi/Software/Python/grovepi",
     "/home/pi/Dexter/GrovePi/Software/Python/grove_rgb_lcd",
@@ -32,6 +37,7 @@ def load_grovepi() -> Optional[Any]:
     global _grovepi_error
 
     if _grovepi_module is not None:
+        # Cache the import result so every sensor does not repeat path probing.
         return _grovepi_module
 
     module, error = _import_module_with_grove_paths("grovepi")
@@ -84,6 +90,7 @@ def load_lcd_functions() -> Tuple[
     set_text = getattr(module, "setText", None)
     set_rgb = getattr(module, "setRGB", None)
     if not callable(set_text) or not callable(set_rgb):
+        # Some installs import but do not expose the expected functions.
         _lcd_error = "grove_rgb_lcd imported, but setText/setRGB were not found"
         _lcd_functions = (None, None)
         return _lcd_functions
@@ -119,6 +126,7 @@ def get_import_status() -> Dict[str, Optional[str]]:
 def _import_module_with_grove_paths(
     module_name: str,
 ) -> Tuple[Optional[Any], Optional[str]]:
+    """Try a normal import first, then retry with Raspberry Pi Grove paths."""
     first_error = None  # type: Optional[Exception]
     try:
         return importlib.import_module(module_name), None
@@ -138,6 +146,7 @@ def _format_import_error(
     first_error: Optional[Exception],
     second_error: Exception,
 ) -> str:
+    """Build a readable import error for startup diagnostics."""
     return (
         "failed to import {module_name}; normal import error: {first}; "
         "after adding GrovePi paths error: {second}"

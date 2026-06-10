@@ -1,4 +1,8 @@
-"""Build, serialize, and lightly validate virtual bike sensor messages."""
+"""Build, serialize, and lightly validate bike sensor messages.
+
+All producers should send this same shape so the backend, analytics, and tests
+can agree on field names and basic data types.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,8 @@ from config_layer.training_profiles import (
     normalize_workout_type,
 )
 
-## used to define the structure of the message
+# These tuples are the contract for a sensor payload. Keeping them together
+# makes it easier to see which fields are required for virtual and real bikes.
 
 REQUIRED_SENSOR_MESSAGE_KEYS = (
     "device_id",
@@ -65,9 +70,11 @@ def build_sensor_message(
     led_state: Any = None,
 ) -> Dict[str, Any]:
     """Create the standard JSON-ready bike sensor message."""
+    # This raises early if a caller passes an unsupported workout type.
     get_training_profile(workout_type)
     normalized_workout_type = normalize_workout_type(workout_type)
 
+    # Round values here so every publisher produces the same JSON shape.
     message = {
         "device_id": str(device_id),
         "timestamp": get_current_timestamp(),
@@ -86,6 +93,7 @@ def build_sensor_message(
         "alert_side": str(alert_side),
     }
     if buzzer_state is not None:
+        # Real hardware messages include actuator state; virtual messages skip it.
         message["buzzer_state"] = bool(buzzer_state)
     if led_state is not None:
         message["led_state"] = bool(led_state)
@@ -104,6 +112,7 @@ def validate_sensor_message(message: Dict[str, Any]) -> bool:
 
     message_keys = set(message.keys())
     has_workout_type = "workout_type" in message
+    # Legacy messages did not include workout_type, so accept them for old data.
     valid_key_sets = (
         set(REQUIRED_SENSOR_MESSAGE_KEYS),
         set(REAL_SENSOR_MESSAGE_KEYS),
@@ -162,8 +171,10 @@ def validate_sensor_message(message: Dict[str, Any]) -> bool:
 
 
 def _is_number(value: Any) -> bool:
+    """Return True for real numeric values, but not booleans."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _is_int(value: Any) -> bool:
+    """Return True for integer values, but not booleans."""
     return isinstance(value, int) and not isinstance(value, bool)

@@ -1,4 +1,8 @@
-"""Safe SQLite schema upgrade helpers."""
+"""Safe SQLite schema upgrade helpers.
+
+These migrations add account/session fields to existing local databases without
+deleting sensor readings that were already captured.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ LEGACY_ATHLETE_EMAIL = "legacy-athlete@local"
 
 def run_schema_migrations(connection: sqlite3.Connection) -> None:
     """Upgrade existing SQLite databases without deleting old data."""
+    # Order matters: create tables first, then columns/indexes, then backfill.
     _create_athletes_table(connection)
     _add_missing_columns(connection)
     _create_indexes(connection)
@@ -23,6 +28,7 @@ def run_schema_migrations(connection: sqlite3.Connection) -> None:
 
 def ensure_legacy_athlete(connection: sqlite3.Connection) -> int:
     """Return the default athlete used for pre-account legacy data."""
+    # Old data did not know about athlete accounts, so it is linked here.
     now = get_current_timestamp()
     connection.execute(
         """
@@ -59,6 +65,7 @@ def ensure_legacy_athlete(connection: sqlite3.Connection) -> int:
 
 
 def _create_athletes_table(connection: sqlite3.Connection) -> None:
+    """Create the athletes table used by newer account-aware features."""
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS athletes (
@@ -81,6 +88,7 @@ def _create_athletes_table(connection: sqlite3.Connection) -> None:
 
 
 def _add_missing_columns(connection: sqlite3.Connection) -> None:
+    """Add account/session columns that may not exist in older databases."""
     column_specs = {
         "sensor_readings": {
             "athlete_id": "INTEGER",
@@ -131,6 +139,7 @@ def _add_missing_columns(connection: sqlite3.Connection) -> None:
 
 
 def _create_indexes(connection: sqlite3.Connection) -> None:
+    """Create indexes used by dashboard/reporting queries."""
     index_statements = (
         "CREATE INDEX IF NOT EXISTS idx_athletes_email ON athletes(email)",
         "CREATE INDEX IF NOT EXISTS idx_sensor_readings_athlete ON sensor_readings(athlete_id)",
@@ -152,6 +161,7 @@ def _backfill_legacy_rows(
     connection: sqlite3.Connection,
     legacy_athlete_id: int,
 ) -> None:
+    """Attach older rows to the legacy athlete where no better data exists."""
     _backfill_session_metadata_from_athlete_email(connection, legacy_athlete_id)
 
     connection.execute(
@@ -189,6 +199,7 @@ def _backfill_session_metadata_from_athlete_email(
     connection: sqlite3.Connection,
     legacy_athlete_id: int,
 ) -> None:
+    """Create athlete rows from old session_metadata email fields."""
     if not _table_columns(connection, "session_metadata"):
         return
 
@@ -225,6 +236,7 @@ def _create_or_update_athlete_from_metadata(
     connection: sqlite3.Connection,
     row: sqlite3.Row,
 ) -> int | None:
+    """Create or update an athlete using one session_metadata row."""
     email = str(row["athlete_email"] or "").strip().lower()
     if not email:
         return None
@@ -289,6 +301,7 @@ def _backfill_from_sessions(
     table: str,
     legacy_athlete_id: int,
 ) -> None:
+    """Copy athlete_id from sessions into another table by session_id."""
     connection.execute(
         f"""
         UPDATE {table}
@@ -314,6 +327,7 @@ def _backfill_message_table_payloads(
     table: str,
     legacy_athlete_id: int,
 ) -> None:
+    """Backfill command/status rows using their stored JSON payloads."""
     rows = connection.execute(
         f"""
         SELECT id, payload, session_id, device_id, athlete_id
@@ -357,6 +371,7 @@ def _athlete_id_from_sessions(
     session_id: str,
     device_id: str,
 ) -> int | None:
+    """Look up an athlete ID from the sessions table."""
     filters = ["session_id = ?", "athlete_id IS NOT NULL"]
     parameters = [session_id]
     if device_id:
@@ -376,6 +391,7 @@ def _athlete_id_from_sessions(
 
 
 def _parse_json_object(payload: str) -> dict[str, object] | None:
+    """Parse a payload and accept only JSON objects."""
     try:
         parsed = json.loads(str(payload))
     except json.JSONDecodeError:
@@ -384,6 +400,7 @@ def _parse_json_object(payload: str) -> dict[str, object] | None:
 
 
 def _non_empty_text(value: object) -> str | None:
+    """Return stripped text, or None for blank values."""
     if value is None:
         return None
     text = str(value).strip()
@@ -391,5 +408,6 @@ def _non_empty_text(value: object) -> str | None:
 
 
 def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    """Return the current column names for a table."""
     rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
     return {str(row["name"] if isinstance(row, sqlite3.Row) else row[1]) for row in rows}

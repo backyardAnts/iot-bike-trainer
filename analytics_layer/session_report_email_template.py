@@ -1,4 +1,8 @@
-"""Email-safe HTML and text templates for workout session reports."""
+"""Email-safe HTML and text templates for workout session reports.
+
+The HTML here uses table-based layout and inline styles because many email
+clients strip modern CSS.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ def build_session_report_email_content(report: dict[str, Any]) -> dict[str, str]
 
 def format_session_report_text_email(report: dict[str, Any]) -> str:
     """Return the plain-text fallback for a workout report."""
+    # Plain text keeps the email readable in clients that block HTML.
     info = report["session_info"]
     performance = report["performance"]
     safety = report["safety"]
@@ -75,6 +80,7 @@ def format_session_report_text_email(report: dict[str, Any]) -> str:
 
     decisions = feedback.get("notable_decisions", [])
     if decisions:
+        # Only include compact decision rows so the email does not become huge.
         lines.extend(["", "Notable DecisionEngine outputs"])
         for decision in decisions:
             lines.append(
@@ -103,6 +109,7 @@ def format_session_report_text_email(report: dict[str, Any]) -> str:
 
 def format_session_report_html_email(report: dict[str, Any]) -> str:
     """Return an email-safe HTML workout report."""
+    # Build complex blocks first so the big template stays easier to scan.
     info = report["session_info"]
     performance = report["performance"]
     status = _status(report)
@@ -177,6 +184,7 @@ def format_session_report_html_email(report: dict[str, Any]) -> str:
 
 
 def _build_metric_cards(report: dict[str, Any]) -> str:
+    """Build the two-column metric card grid for the HTML report."""
     info = report["session_info"]
     performance = report["performance"]
     cards = [
@@ -250,6 +258,7 @@ def _build_metric_cards(report: dict[str, Any]) -> str:
 
     rows = []
     for index in range(0, len(cards), 2):
+        # Email clients are safest with table rows instead of flex/grid.
         left = cards[index]
         right = cards[index + 1] if index + 1 < len(cards) else _empty_card()
         rows.append(f"<tr>{left}{right}</tr>")
@@ -269,6 +278,7 @@ def _metric_card(
     helper: str,
     accent_color: str,
 ) -> str:
+    """Return one HTML metric card cell."""
     unit_html = (
         f'<span style="font-size:14px;color:{MUTED_COLOR};font-weight:normal;"> {_escape(unit)}</span>'
         if unit
@@ -290,10 +300,12 @@ def _metric_card(
 
 
 def _empty_card() -> str:
+    """Return a blank cell so odd card counts still keep the table aligned."""
     return '<td width="50%" style="padding:6px;">&nbsp;</td>'
 
 
 def _build_safety_html(report: dict[str, Any]) -> str:
+    """Build the safety and feedback block in the HTML report."""
     safety = report["safety"]
     feedback = report["feedback"]
     status = _status(report)
@@ -323,6 +335,7 @@ def _build_safety_html(report: dict[str, Any]) -> str:
 
 
 def _safety_badge(label: str, count: int, color: str) -> str:
+    """Return one warning-count badge."""
     badge_color = GOOD_COLOR if int(count) == 0 else color
     return f"""
 <td width="25%" style="padding:2px 4px 2px 0;">
@@ -334,6 +347,7 @@ def _safety_badge(label: str, count: int, color: str) -> str:
 
 
 def _build_decisions_html(report: dict[str, Any]) -> str:
+    """Build the notable decisions table, or a quiet empty-state line."""
     decisions = report["feedback"].get("notable_decisions", [])
     if not decisions:
         return f'<p style="margin:12px 0 0 0;font-size:13px;line-height:20px;color:{MUTED_COLOR};">No notable DecisionEngine warnings were logged for this session.</p>'
@@ -363,6 +377,7 @@ def _build_decisions_html(report: dict[str, Any]) -> str:
 
 
 def _build_comparison_html(report: dict[str, Any]) -> str:
+    """Build the comparison block against previous same-type rides."""
     comparison = report["comparison"]
     return f"""
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid {BORDER_COLOR};border-radius:10px;background:#ffffff;">
@@ -378,6 +393,7 @@ def _build_comparison_html(report: dict[str, Any]) -> str:
 
 
 def _comparison_row(label: str, comparison: dict[str, Any]) -> str:
+    """Return one HTML line of comparison deltas."""
     if comparison.get("session_id") is None:
         return f'<div style="font-size:13px;line-height:21px;color:{MUTED_COLOR};">{_escape(label)}: no data</div>'
     warning_delta = comparison["warning_count_delta"]
@@ -393,6 +409,7 @@ def _comparison_row(label: str, comparison: dict[str, Any]) -> str:
 
 
 def _build_detail_table(report: dict[str, Any]) -> str:
+    """Build the detailed stats table when readings exist."""
     if int(report.get("total_sensor_readings", 0)) <= 0:
         return ""
 
@@ -427,6 +444,7 @@ def _build_detail_table(report: dict[str, Any]) -> str:
 
 
 def _build_summary_text(report: dict[str, Any]) -> str:
+    """Build the short narrative summary at the top of the report."""
     info = report["session_info"]
     performance = report["performance"]
     safety = report["safety"]
@@ -454,6 +472,7 @@ def _build_summary_text(report: dict[str, Any]) -> str:
 
 
 def _format_comparison_line(label: str, comparison: dict[str, Any]) -> str:
+    """Return one comparison line for the plain-text email."""
     if comparison.get("session_id") is None:
         return f"- {label}: no data"
     return (
@@ -465,6 +484,7 @@ def _format_comparison_line(label: str, comparison: dict[str, Any]) -> str:
 
 
 def _status(report: dict[str, Any]) -> str:
+    """Return the report-level status used for labels and colors."""
     safety = report["safety"]
     if int(safety["danger_warnings"]) > 0:
         return "danger"
@@ -474,6 +494,7 @@ def _status(report: dict[str, Any]) -> str:
 
 
 def _status_label(report: dict[str, Any]) -> str:
+    """Return the human label for the report-level status."""
     status = _status(report)
     if status == "danger":
         return "Danger"
@@ -483,6 +504,7 @@ def _status_label(report: dict[str, Any]) -> str:
 
 
 def _status_color(status: str) -> str:
+    """Return the badge color for a report status."""
     if status == "danger":
         return DANGER_COLOR
     if status == "warning":
@@ -491,6 +513,7 @@ def _status_color(status: str) -> str:
 
 
 def _alert_color(alert_level: str) -> str:
+    """Return the badge color for an individual alert level."""
     if alert_level == "danger":
         return DANGER_COLOR
     if alert_level == "warning":
@@ -499,6 +522,7 @@ def _alert_color(alert_level: str) -> str:
 
 
 def _optional_calories(report: dict[str, Any]) -> float | None:
+    """Read optional calorie values when future reports include them."""
     for source in (report, report.get("performance", {})):
         if not isinstance(source, dict):
             continue
@@ -512,6 +536,7 @@ def _optional_calories(report: dict[str, Any]) -> float | None:
 
 
 def _format_timestamp(timestamp: str) -> str:
+    """Format ISO timestamps for display in the email."""
     timestamp = str(timestamp).strip()
     if not timestamp:
         return ""
@@ -523,6 +548,7 @@ def _format_timestamp(timestamp: str) -> str:
 
 
 def _format_duration(seconds: int) -> str:
+    """Format seconds as a compact duration string."""
     seconds = max(0, int(seconds))
     minutes, remaining_seconds = divmod(seconds, 60)
     hours, remaining_minutes = divmod(minutes, 60)
@@ -534,6 +560,7 @@ def _format_duration(seconds: int) -> str:
 
 
 def _format_number(value: Any, decimals: int) -> str:
+    """Format a number safely, falling back to zero on bad input."""
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -544,17 +571,21 @@ def _format_number(value: Any, decimals: int) -> str:
 
 
 def _signed(value: Any) -> str:
+    """Format a signed comparison delta."""
     return f"{float(value):+.1f}"
 
 
 def _friendly_action(action: Any) -> str:
+    """Turn action identifiers into readable labels."""
     text = str(action).strip().replace("_", " ")
     return text.capitalize() if text else "None"
 
 
 def _title_case(value: Any) -> str:
+    """Return title-cased text for workout names."""
     return str(value or "").strip().replace("_", " ").title()
 
 
 def _escape(value: Any) -> str:
+    """Escape text before inserting it into HTML."""
     return escape(str(value), quote=True)

@@ -1,4 +1,8 @@
-"""SQLite connection and initialization helpers."""
+"""SQLite connection and initialization helpers.
+
+All database code goes through this module so the data path and row factory are
+consistent across storage, queries, analytics, and tests.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 def get_db_connection() -> sqlite3.Connection:
     """Return a SQLite connection, creating the data folder if needed."""
+    # SQLite will create the file, but the folder must exist first.
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH)
     connection.row_factory = sqlite3.Row
@@ -28,5 +33,6 @@ def initialize_database() -> None:
     schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
 
     with get_db_connection() as connection:
+        # schema.sql handles fresh installs; migrations handle older databases.
         connection.executescript(schema_sql)
         run_schema_migrations(connection)

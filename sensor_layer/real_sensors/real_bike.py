@@ -1,4 +1,8 @@
-"""Composite real Raspberry Pi/GrovePi bike sensor layer."""
+"""Composite real Raspberry Pi/GrovePi bike sensor layer.
+
+RealBike reads the physical sensors, handles local obstacle warnings, accepts
+backend feedback commands, and emits the same message shape as the virtual bike.
+"""
 
 from __future__ import annotations
 
@@ -53,6 +57,7 @@ class RealBike(object):
         command_timeout_seconds: float = 3.0,
         defer_session_creation: bool = False,
     ) -> None:
+        """Configure all real hardware wrappers and session state."""
         self.device_id = str(device_id)
         self.workout_type = self._normalize_workout_type(workout_type)
         self._session_counter_file = session_counter_file
@@ -61,6 +66,7 @@ class RealBike(object):
         if session_id is not None:
             self.session_id = str(session_id)
         elif self._defer_session_creation:
+            # Real MQTT mode can wait for a START_WORKOUT command before IDs exist.
             self.session_id = ""
         else:
             self.session_id = get_next_session_id(session_counter_file)
@@ -77,6 +83,7 @@ class RealBike(object):
         self.command_timeout_seconds = float(command_timeout_seconds)
         self._last_hall_error = ""  # type: str
 
+        # Ultrasonic sensors stay enabled because they provide local safety.
         self.ultrasonic_sensors = UltrasonicSensors(left_port=5, right_port=6)
         self.temperature_sensor = None  # type: Optional[TemperatureSensor]
         if self.enable_temperature:
@@ -123,6 +130,7 @@ class RealBike(object):
 
     def update(self) -> Dict[str, Any]:
         """Read all physical sensors and return one JSON-ready dictionary."""
+        # Read clearance first so nearby objects can trigger immediate feedback.
         left_distance_m, right_distance_m = self.ultrasonic_sensors.read()
         ultrasonic_status = self.ultrasonic_sensors.get_last_status()
 
@@ -136,6 +144,7 @@ class RealBike(object):
             # buzzer/LCD response; MQTT/backend still receive telemetry.
             feedback = self._apply_hardware_feedback(local_feedback)
         elif was_local_ultrasonic_alert_active:
+            # Once the local warning clears, restore the latest workout guidance.
             feedback = self._feedback_after_local_ultrasonic_clear()
             feedback = self._apply_hardware_feedback(feedback)
         else:
@@ -147,6 +156,7 @@ class RealBike(object):
         feedback_input = self._build_feedback_input(left_distance_m, right_distance_m)
         if feedback is None:
             if self._should_use_local_feedback_fallback():
+                # Standalone mode has no backend, so make local physical decisions.
                 feedback = decide_physical_feedback(feedback_input)
                 feedback = self._apply_hardware_feedback(feedback)
             else:
@@ -221,6 +231,7 @@ class RealBike(object):
         athlete: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Mark the real bike workout as active, creating a session ID if needed."""
+        # Dashboard commands may update mode, workout type, and athlete together.
         if workout_type:
             self.set_workout_type(workout_type)
         if mode:
@@ -233,6 +244,7 @@ class RealBike(object):
             self._fixed_session_id = True
         elif not self.workout_active:
             if not self._fixed_session_id or not self.session_id:
+                # Automatic IDs are only generated when no explicit ID was supplied.
                 self.session_id = get_next_session_id(self._session_counter_file)
 
         self.workout_active = True
@@ -261,9 +273,11 @@ class RealBike(object):
         self._last_command_time = time.monotonic()
 
         if feedback["decision_type"] == "workout_guidance":
+            # Keep the latest workout message so it can return after safety clears.
             self._latest_workout_feedback = dict(feedback)
 
         if self.local_ultrasonic_alert_active:
+            # Local obstacle warnings override backend safe/workout messages.
             local_feedback = self._build_local_ultrasonic_feedback()
             self._apply_hardware_feedback(local_feedback)
             return
@@ -325,6 +339,7 @@ class RealBike(object):
 
     def cleanup(self) -> None:
         """Stop background hardware work and leave outputs off."""
+        # Cleanup is best-effort because hardware may already be disconnected.
         if self.hall_sensors is not None:
             try:
                 self.hall_sensors.stop()
@@ -341,6 +356,7 @@ class RealBike(object):
         cadence_magnets_per_rotation: int,
         hall_debug: bool,
     ) -> Optional[Any]:
+        """Create the Hall speed/cadence wrapper, disabling it on setup errors."""
         try:
             from sensor_layer.real_sensors.hall_sensor_counter import (
                 SpeedCadenceHallSensors,
@@ -362,6 +378,7 @@ class RealBike(object):
             return None
 
     def _read_hall_values(self) -> Tuple[float, int]:
+        """Read speed/cadence from Hall sensors with safe fallbacks."""
         if self.hall_sensors is None:
             return 0.0, 0
 
@@ -385,6 +402,7 @@ class RealBike(object):
         return round(float(speed_kmh), 2), int(cadence_rpm)
 
     def _read_temperature_values(self) -> Tuple[float, Optional[float]]:
+        """Read temperature/humidity with safe fallback values."""
         if self.temperature_sensor is None:
             return 25.0, None
 
@@ -403,6 +421,7 @@ class RealBike(object):
         return round(float(temperature_c), 1), humidity_percent
 
     def _warn_temperature_once(self, message: str) -> None:
+        """Print repeated temperature errors only once."""
         if message == self._last_temperature_error:
             return
         self._last_temperature_error = message
@@ -422,6 +441,7 @@ class RealBike(object):
             time.sleep(duration_seconds)
 
     def _should_use_local_feedback_fallback(self) -> bool:
+        """Return True when local feedback should run without backend commands."""
         return not self.command_feedback_enabled
 
     def _update_local_ultrasonic_safety(
@@ -429,6 +449,7 @@ class RealBike(object):
         left_distance_m: float,
         right_distance_m: float,
     ) -> Optional[Dict[str, Any]]:
+        """Update low-latency local ultrasonic warning state."""
         left_triggered = _is_distance_below_cm(left_distance_m, WARNING_THRESHOLD_CM)
         right_triggered = _is_distance_below_cm(right_distance_m, WARNING_THRESHOLD_CM)
 
@@ -440,6 +461,7 @@ class RealBike(object):
             right_distance_m,
             LOCAL_ULTRASONIC_CLEAR_THRESHOLD_CM,
         ):
+            # Use a higher clear threshold so the warning does not flicker.
             self.local_ultrasonic_alert_active = False
             self.local_alert_side = settings.DEFAULT_ALERT_SIDE
 
@@ -450,6 +472,7 @@ class RealBike(object):
         return self._build_local_ultrasonic_feedback()
 
     def _build_local_ultrasonic_feedback(self) -> Dict[str, Any]:
+        """Build local warning feedback using the same physical decision helper."""
         alert_distance_m = max(0.0, (WARNING_THRESHOLD_CM - 1.0) / 100.0)
         safe_distance_m = 9.99
         alert_side = str(self.local_alert_side)
@@ -472,6 +495,7 @@ class RealBike(object):
         return feedback
 
     def _feedback_after_local_ultrasonic_clear(self) -> Dict[str, Any]:
+        """Return the feedback to show once an obstacle warning clears."""
         if self._latest_workout_feedback is not None:
             restored_feedback = dict(self._latest_workout_feedback)
             restored_feedback["buzzer_state"] = False
@@ -488,6 +512,7 @@ class RealBike(object):
         left_distance_m: float,
         right_distance_m: float,
     ) -> Dict[str, Any]:
+        """Create the small payload needed by physical feedback decisions."""
         return {
             "workout_type": self.workout_type,
             "left_distance_m": left_distance_m,
@@ -495,6 +520,7 @@ class RealBike(object):
         }
 
     def _build_safe_feedback(self) -> Dict[str, Any]:
+        """Build a safe baseline feedback state."""
         return decide_physical_feedback(
             {
                 "workout_type": self.workout_type,
@@ -504,12 +530,14 @@ class RealBike(object):
         )
 
     def _apply_hardware_feedback(self, feedback: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize feedback, update buzzer/LCD, and remember the state."""
         self._latest_feedback = self._normalize_feedback_command(feedback)
         self.buzzer.set_state(bool(self._latest_feedback["buzzer_state"]))
         self._update_lcd(self._latest_feedback)
         return self._latest_feedback
 
     def _apply_workout_buzzer_pulse(self, feedback: Dict[str, Any]) -> None:
+        """Pulse the buzzer for urgent workout guidance with a cooldown."""
         if feedback.get("decision_type") != "workout_guidance":
             return
         if bool(feedback.get("buzzer_state", False)):
@@ -535,6 +563,7 @@ class RealBike(object):
         self._last_workout_buzzer_pulse_action = recommended_action
 
     def _is_suppressed_backend_safe_feedback(self, feedback: Dict[str, Any]) -> bool:
+        """Return True when backend safe feedback should not hide workout guidance."""
         if not self.command_feedback_enabled:
             return False
 
@@ -545,6 +574,7 @@ class RealBike(object):
         )
 
     def _apply_backend_safe_feedback(self, feedback: Dict[str, Any]) -> None:
+        """Handle a backend safe message without erasing workout guidance."""
         self.buzzer.set_state(False)
         if self._latest_workout_feedback is None:
             suppressed_feedback = dict(feedback)
@@ -559,6 +589,7 @@ class RealBike(object):
         self._apply_hardware_feedback(restored_feedback)
 
     def _normalize_feedback_command(self, command_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Fill in missing feedback command fields with safe defaults."""
         safe_feedback = self._build_safe_feedback()
         alert_level = str(command_data.get("alert_level", safe_feedback["alert_level"]))
         alert_side = str(
@@ -583,6 +614,7 @@ class RealBike(object):
         lcd_line_1 = str(command_data.get("lcd_line_1", display_message))
         lcd_line_2 = str(command_data.get("lcd_line_2", ""))
         if alert_level not in {"warning", "danger"} and not buzzer_state:
+            # Safe physical feedback should show safe LCD text unless overridden.
             if "lcd_line_1" not in command_data:
                 lcd_line_1 = str(safe_feedback["lcd_line_1"])
             if "lcd_line_2" not in command_data:
@@ -619,6 +651,7 @@ class RealBike(object):
         }
 
     def _update_lcd(self, feedback: Dict[str, Any]) -> None:
+        """Write changed feedback lines to the LCD."""
         if self.lcd is None:
             return
 
@@ -640,6 +673,7 @@ class RealBike(object):
         cadence_rpm: int,
         temperature_c: float,
     ) -> str:
+        """Build the terminal status line for real-mode output."""
         status_line = (
             "LEFT: {left} | RIGHT: {right} | STATUS: {status} | "
             "BUZZER: {buzzer} | SPEED: {speed:.1f} km/h | "
@@ -667,28 +701,33 @@ class RealBike(object):
         return status_line
 
     def _warn_hall_once(self, message: str) -> None:
+        """Print repeated Hall errors only once."""
         if message == self._last_hall_error:
             return
         self._last_hall_error = message
         print(message)
 
     def _format_distance_cm(self, raw_cm: Any, valid: bool) -> str:
+        """Format raw ultrasonic centimeters for terminal output."""
         if not valid:
             return "INVALID"
         return "{:d} cm".format(int(round(float(raw_cm))))
 
     def _normalize_workout_type(self, workout_type: str) -> str:
+        """Validate and normalize the current workout type."""
         get_training_profile(workout_type)
         return normalize_workout_type(workout_type)
 
 
 def _coerce_bool(value: Any) -> bool:
+    """Convert booleans and common truthy strings to bool."""
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _coerce_int(value: Any, default: int) -> int:
+    """Convert a value to int with a fallback."""
     if isinstance(value, bool):
         return default
     try:
@@ -698,6 +737,7 @@ def _coerce_int(value: Any, default: int) -> int:
 
 
 def _distance_to_cm(value: Any) -> Optional[float]:
+    """Convert meters to centimeters, rejecting bad readings."""
     if isinstance(value, bool):
         return None
     try:
@@ -710,6 +750,7 @@ def _distance_to_cm(value: Any) -> Optional[float]:
 
 
 def _is_distance_below_cm(value: Any, threshold_cm: float) -> bool:
+    """Return True when a distance is valid and below a threshold."""
     distance_cm = _distance_to_cm(value)
     return distance_cm is not None and distance_cm < float(threshold_cm)
 
@@ -719,6 +760,7 @@ def _are_distances_above_cm(
     right_distance_m: Any,
     threshold_cm: float,
 ) -> bool:
+    """Return True when both distances are valid and safely above a threshold."""
     left_cm = _distance_to_cm(left_distance_m)
     right_cm = _distance_to_cm(right_distance_m)
     if left_cm is None or right_cm is None:
@@ -727,6 +769,7 @@ def _are_distances_above_cm(
 
 
 def _alert_side(left_alert: bool, right_alert: bool) -> str:
+    """Convert left/right warning booleans into the shared alert side."""
     if left_alert and right_alert:
         return "both"
     if left_alert:
@@ -737,6 +780,7 @@ def _alert_side(left_alert: bool, right_alert: bool) -> str:
 
 
 def _clean_optional_text(value: Any) -> Optional[str]:
+    """Return stripped text, or None for blank values."""
     if value is None:
         return None
     text = str(value).strip()

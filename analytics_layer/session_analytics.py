@@ -1,4 +1,8 @@
-"""Calculate session-level analytics from stored sensor readings."""
+"""Calculate session-level analytics from stored sensor readings.
+
+This module turns raw sensor rows into ride summaries that are easy to print,
+store, or compare with an earlier ride.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +26,7 @@ def calculate_latest_session_analytics(
     athlete_id: int | None = None,
 ) -> dict[str, Any] | None:
     """Calculate analytics for the latest session with stored readings."""
+    # A dashboard can ask for the latest ride without knowing the session ID.
     latest_session_id = get_latest_session_id(athlete_id=athlete_id)
     if latest_session_id is None:
         return None
@@ -31,6 +36,7 @@ def calculate_latest_session_analytics(
 
 def calculate_session_analytics(session_id: str) -> dict[str, Any]:
     """Calculate analytics for one session_id and compare with the previous session."""
+    # Build the current summary first, then add athlete and comparison context.
     readings = load_readings_for_session(session_id)
     current_analytics = calculate_analytics_from_readings(session_id, readings)
     athlete_id = _get_athlete_id_for_session(session_id)
@@ -42,6 +48,7 @@ def calculate_session_analytics(session_id: str) -> dict[str, Any]:
     )
     previous_analytics = None
     if previous_session_id is not None:
+        # The previous ride is calculated from readings, not from cached summaries.
         previous_analytics = calculate_analytics_from_readings(
             previous_session_id,
             load_readings_for_session(previous_session_id),
@@ -62,6 +69,7 @@ def calculate_analytics_from_readings(
     if not readings:
         return _empty_analytics(session_id)
 
+    # Store numbers as simple rounded values because they are shown in reports.
     speeds = [float(reading["speed_kmh"]) for reading in readings]
     cadences = [int(reading["cadence_rpm"]) for reading in readings]
     heart_rates = [int(reading["heart_rate_bpm"]) for reading in readings]
@@ -137,6 +145,7 @@ def list_session_ids_newest_first(athlete_id: int | None = None) -> list[str]:
     """Return session_ids ordered by their latest stored reading."""
     with get_db_connection() as connection:
         if athlete_id is None:
+            # Use MAX(id) because inserted reading order is the most reliable order.
             rows = connection.execute(
                 """
                 SELECT session_id, MAX(id) AS latest_reading_id
@@ -183,6 +192,7 @@ def get_athlete_analytics(
 
 
 def _empty_analytics(session_id: str) -> dict[str, Any]:
+    """Return the report shape for a session with no sensor readings."""
     return {
         "session_id": session_id,
         "athlete_id": _get_athlete_id_for_session(session_id),
@@ -202,6 +212,7 @@ def _empty_analytics(session_id: str) -> dict[str, Any]:
 
 
 def _count_heart_rate_zones(heart_rates: list[int]) -> dict[str, int]:
+    """Count how many samples landed in each heart-rate zone."""
     zone_counts = {
         "easy": 0,
         "moderate": 0,
@@ -216,6 +227,7 @@ def _count_heart_rate_zones(heart_rates: list[int]) -> dict[str, int]:
 
 
 def _get_heart_rate_zone(heart_rate_bpm: int) -> str:
+    """Map a heart-rate value into the report's simple effort buckets."""
     if heart_rate_bpm < 120:
         return "easy"
     if heart_rate_bpm < 150:
@@ -226,6 +238,7 @@ def _get_heart_rate_zone(heart_rate_bpm: int) -> str:
 
 
 def _estimate_sample_seconds(readings: list[dict[str, Any]]) -> int:
+    """Estimate the sampling interval from timestamps, defaulting to 1 second."""
     timestamps = _parse_reading_timestamps(readings)
     intervals = [
         int((timestamps[index] - timestamps[index - 1]).total_seconds())
@@ -242,6 +255,7 @@ def _calculate_duration_seconds(
     readings: list[dict[str, Any]],
     sample_seconds: int,
 ) -> int:
+    """Return the best duration estimate from timestamps and sample count."""
     timestamps = _parse_reading_timestamps(readings)
     elapsed_seconds = 0
     if len(timestamps) >= 2:
@@ -252,6 +266,7 @@ def _calculate_duration_seconds(
 
 
 def _parse_reading_timestamps(readings: list[dict[str, Any]]) -> list[datetime]:
+    """Parse valid reading timestamps and ignore malformed ones."""
     timestamps = []
     for reading in readings:
         parsed_timestamp = _parse_timestamp(str(reading.get("timestamp", "")))
@@ -262,6 +277,7 @@ def _parse_reading_timestamps(readings: list[dict[str, Any]]) -> list[datetime]:
 
 
 def _parse_timestamp(timestamp: str) -> datetime | None:
+    """Parse one ISO timestamp, returning None when it is not valid."""
     try:
         return datetime.fromisoformat(timestamp)
     except ValueError:
@@ -269,6 +285,7 @@ def _parse_timestamp(timestamp: str) -> datetime | None:
 
 
 def _get_athlete_id_for_session(session_id: str) -> int | None:
+    """Find the athlete linked to a session from any table that has it."""
     with get_db_connection() as connection:
         for table in ("sessions", "sensor_readings", "decision_logs"):
             row = connection.execute(

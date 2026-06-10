@@ -1,4 +1,8 @@
-"""Production GrovePi buzzer controller."""
+"""Production GrovePi buzzer controller.
+
+The controller keeps the rest of the bike code from dealing with GrovePi import
+failures or repeated write errors.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ class BuzzerController(object):
     """Control a Grove buzzer connected to a digital port."""
 
     def __init__(self, port: int = 7) -> None:
+        """Configure the buzzer output pin when GrovePi is available."""
         self.port = int(port)
         self.enabled = False
         self.grovepi = load_grovepi()
@@ -43,6 +48,7 @@ class BuzzerController(object):
         """Set the buzzer state."""
         next_enabled = bool(enabled)
         if self.enabled == next_enabled and not force:
+            # Avoid repeated writes for the same state.
             return
 
         self.enabled = next_enabled
@@ -65,6 +71,7 @@ class BuzzerController(object):
         self.set_state(False, force=True)
 
     def _warn_once(self, message: str) -> None:
+        """Print each hardware warning once so logs stay readable."""
         if message == self._last_error:
             return
         self._last_error = message

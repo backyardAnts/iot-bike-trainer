@@ -1,4 +1,8 @@
-"""Tests for retained active-session MQTT publishing."""
+"""Tests for retained active-session MQTT publishing.
+
+Session status messages are retained for dashboards, and stopped statuses also
+trigger report generation. These tests lock down that behavior without a broker.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,10 @@ from mqtt_layer.publisher import MqttPublisher
 
 
 class SessionStatusMqttTest(unittest.TestCase):
+    """Backend status-message tests with storage/report functions patched out."""
+
     def setUp(self) -> None:
+        """Patch storage/report callbacks so assertions can inspect calls."""
         self.saved_status_messages = []
         self.started_sessions = []
         self.stopped_sessions = []
@@ -30,6 +37,7 @@ class SessionStatusMqttTest(unittest.TestCase):
         backend_service_module.process_stopped_session_report = self._process_report
 
     def tearDown(self) -> None:
+        """Restore backend callbacks after each test."""
         backend_service_module.save_status_message = self.original_save_status_message
         backend_service_module.start_session = self.original_start_session
         backend_service_module.stop_session = self.original_stop_session
@@ -174,12 +182,16 @@ class SessionStatusMqttTest(unittest.TestCase):
 
 
 class _FakeMqttMessage:
+    """Minimal paho-style MQTT message used by receiver tests."""
+
     def __init__(self, topic: str, payload: bytes) -> None:
         self.topic = topic
         self.payload = payload
 
 
 class _FakePublisher:
+    """Publisher fake that records payloads and retain flags by topic."""
+
     def __init__(self) -> None:
         self.payloads = {}
         self.retained = {}
@@ -196,6 +208,8 @@ class _FakePublisher:
 
 
 class _FakeClient:
+    """MQTT client fake used to verify retain=True is passed through."""
+
     def __init__(self) -> None:
         self.calls = []
 

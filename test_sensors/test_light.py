@@ -1,4 +1,8 @@
-"""Simple GrovePi light or LED blink test for D7."""
+"""Simple GrovePi light or LED blink test for D7.
+
+Use this to verify a simple digital output before connecting it to the full
+bike feedback flow.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ DEFAULT_PORT = 7
 DEFAULT_ON_TIME_SECONDS = 1.0
 DEFAULT_OFF_TIME_SECONDS = 1.0
 GROVEPI_PATHS = (
+    # Common GrovePi install paths on the Raspberry Pi image.
     "/home/pi/Dexter/GrovePi/Software/Python",
     "/home/pi/Dexter/GrovePi/Software/Python/grovepi",
 )
@@ -24,6 +29,7 @@ def import_grovepi() -> Any:
 
         return grovepi
     except ImportError:
+        # Try the paths used by the standard Dexter GrovePi installation.
         for path in GROVEPI_PATHS:
             if path not in sys.path:
                 sys.path.append(path)
@@ -59,6 +65,7 @@ def safe_write(grovepi: Any, port: int, value: int) -> bool:
 
 
 def main() -> None:
+    """Blink the configured output port until Ctrl+C."""
     parser = argparse.ArgumentParser(description="Blink GrovePi light/LED.")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--on-time", type=float, default=DEFAULT_ON_TIME_SECONDS)
@@ -71,6 +78,7 @@ def main() -> None:
 
     try:
         while True:
+            # A visible blink confirms the port can be written high and low.
             if safe_write(grovepi, args.port, 1):
                 print("LIGHT D{}: ON".format(args.port))
             time.sleep(args.on_time)
@@ -81,6 +89,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nStopping light test.")
     finally:
+        # Leave the output low after the test stops.
         safe_write(grovepi, args.port, 0)
         print("LIGHT D{}: OFF".format(args.port))
 

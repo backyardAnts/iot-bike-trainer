@@ -1,4 +1,8 @@
-"""Tests for physical GrovePi feedback decisions."""
+"""Tests for physical GrovePi feedback decisions.
+
+These tests cover the side-warning rules and the way backend feedback commands
+drive real-bike buzzer/LCD behavior.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ from sensor_layer.real_sensors.real_bike import RealBike
 
 
 def make_sensor_data(left_distance_m: float, right_distance_m: float) -> dict[str, object]:
+    """Build the small payload needed by physical safety decisions."""
     return {
         "workout_type": "speed",
         "left_distance_m": left_distance_m,
@@ -25,6 +30,7 @@ def make_workout_sensor_data(
     speed_kmh: float,
     heart_rate_bpm: int,
 ) -> dict[str, object]:
+    """Build a full message used when workout guidance is part of the test."""
     return {
         "device_id": "bike_001",
         "timestamp": "test",
@@ -45,6 +51,8 @@ def make_workout_sensor_data(
 
 
 class PhysicalFeedbackDeciderTest(unittest.TestCase):
+    """Physical feedback and RealBike command-behavior tests."""
+
     def test_no_object_close_is_safe(self) -> None:
         decision = decide_physical_feedback(make_sensor_data(0.50, 0.50))
 
@@ -428,6 +436,8 @@ class PhysicalFeedbackDeciderTest(unittest.TestCase):
 
 
 class _FakeRealBike:
+    """Bike fake that records physical feedback commands."""
+
     def __init__(self) -> None:
         self.last_command = {}
 
@@ -436,6 +446,8 @@ class _FakeRealBike:
 
 
 class _FakeBuzzer:
+    """Buzzer fake that records state and pulse durations."""
+
     def __init__(self) -> None:
         self.enabled = False
         self.beep_durations = []
@@ -449,6 +461,8 @@ class _FakeBuzzer:
 
 
 class _FakeLcd:
+    """LCD fake that records the last two-line message."""
+
     def __init__(self) -> None:
         self.last_message = ("", "")
         self.display_count = 0
@@ -459,6 +473,8 @@ class _FakeLcd:
 
 
 class _FakeUltrasonicSensors:
+    """Ultrasonic fake with adjustable left/right distances."""
+
     def __init__(
         self,
         left_distance_m: float = 2.0,
@@ -489,6 +505,7 @@ def _make_workout_command(
     speed_kmh: float,
     heart_rate_bpm: int,
 ) -> dict[str, object]:
+    """Build a backend feedback command from workout guidance."""
     decision = DecisionEngine(rider_profile={"age": 20}).analyze(
         make_workout_sensor_data(
             workout_type=workout_type,
@@ -505,6 +522,7 @@ def _make_fake_real_bike(
     left_distance_m: float = 2.0,
     right_distance_m: float = 2.0,
 ) -> RealBike:
+    """Create a RealBike instance without running its hardware __init__."""
     bike = object.__new__(RealBike)
     bike.device_id = "bike_001"
     bike.session_id = "session_test"

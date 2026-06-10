@@ -1,4 +1,8 @@
-"""Simple GrovePi temperature and humidity sensor test for D2."""
+"""Simple GrovePi temperature and humidity sensor test for D2.
+
+This reads the DHT sensor directly and prints INVALID when GrovePi returns a
+bad number, which is common during setup.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +17,7 @@ DEFAULT_PORT = 2
 DEFAULT_SENSOR_TYPE = 0
 DEFAULT_INTERVAL_SECONDS = 1.0
 GROVEPI_PATHS = (
+    # Common GrovePi install paths on the Raspberry Pi image.
     "/home/pi/Dexter/GrovePi/Software/Python",
     "/home/pi/Dexter/GrovePi/Software/Python/grovepi",
 )
@@ -25,6 +30,7 @@ def import_grovepi() -> Any:
 
         return grovepi
     except ImportError:
+        # Try the paths used by the standard Dexter GrovePi installation.
         for path in GROVEPI_PATHS:
             if path not in sys.path:
                 sys.path.append(path)
@@ -55,6 +61,7 @@ def read_temperature_humidity(
 
     temperature_c = clean_number(temperature_c)
     humidity_percent = clean_number(humidity_percent)
+    # Both values should be present; partial DHT reads are treated as invalid.
     if temperature_c is None or humidity_percent is None:
         return None, None
 
@@ -78,6 +85,7 @@ def clean_number(value: Any) -> Optional[float]:
 
 
 def main() -> None:
+    """Print DHT readings until Ctrl+C."""
     parser = argparse.ArgumentParser(description="Test GrovePi DHT sensor.")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--sensor-type", type=int, default=DEFAULT_SENSOR_TYPE)
@@ -96,6 +104,7 @@ def main() -> None:
             )
 
             if temperature_c is None or humidity_percent is None:
+                # Invalid readings are printed instead of crashing the loop.
                 print("TEMP D{}: INVALID".format(args.port))
             else:
                 print(

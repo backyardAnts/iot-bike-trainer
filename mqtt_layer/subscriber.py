@@ -1,4 +1,8 @@
-"""MQTT command subscriber for bike feedback commands."""
+"""MQTT command subscriber for bike feedback commands.
+
+Bike runners use this to receive backend commands while optionally listening to
+merged sensor messages published by the backend.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +20,7 @@ class MqttCommandSubscriber:
         command_handler: Any,
         merged_sensor_handler: Any | None = None,
     ) -> None:
+        """Store the MQTT client and the handlers that should receive messages."""
         self.client = client
         self.command_handler = command_handler
         self.merged_sensor_handler = merged_sensor_handler
@@ -34,6 +39,7 @@ class MqttCommandSubscriber:
             self._unsubscribe(MERGED_SENSORS_TOPIC, "MQTT merged sensor")
 
     def _subscribe(self, topic: str, label: str) -> None:
+        """Subscribe to a topic and print the broker return code."""
         result = self.client.subscribe(topic)
         rc = result[0] if isinstance(result, tuple) else getattr(result, "rc", 0)
         if rc == 0:
@@ -42,6 +48,7 @@ class MqttCommandSubscriber:
             print(f"Failed to subscribe to {topic}; code: {rc}")
 
     def _unsubscribe(self, topic: str, label: str) -> None:
+        """Unsubscribe from a topic and print the broker return code."""
         result = self.client.unsubscribe(topic)
         rc = result[0] if isinstance(result, tuple) else getattr(result, "rc", 0)
         if rc == 0:
@@ -50,6 +57,7 @@ class MqttCommandSubscriber:
             print(f"Failed to unsubscribe from {topic}; code: {rc}")
 
     def _on_message(self, client: Any, userdata: object, message: Any) -> None:
+        """Route command and merged-sensor messages to their handlers."""
         if message.topic == MERGED_SENSORS_TOPIC and self.merged_sensor_handler is not None:
             self.merged_sensor_handler(message.payload)
             return

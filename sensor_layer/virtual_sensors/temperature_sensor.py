@@ -1,4 +1,8 @@
-"""Stateful virtual outdoor temperature sensor."""
+"""Stateful virtual outdoor temperature sensor.
+
+Temperature changes slowly because real ambient temperature does not jump from
+one sensor sample to the next.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +20,7 @@ class VirtualTemperatureSensor:
         max_temp: float = MAX_TEMPERATURE_C,
         rng: random.Random | None = None,
     ) -> None:
+        """Create the temperature state and bounds."""
         self.min_temp = float(min_temp)
         self.max_temp = float(max_temp)
         self._rng = rng or random.Random()
@@ -46,7 +51,9 @@ class VirtualTemperatureSensor:
         return self.current_temperature_c
 
     def _choose_new_target(self) -> None:
+        """Choose a new slow-moving weather target."""
         if self._rng.random() < 0.18:
+            # Occasional hot targets allow the safety layer to see warm rides.
             self._target_temperature_c = self._rng.uniform(35.2, self.max_temp)
             self._target_updates_remaining = self._rng.randint(140, 240)
         else:
@@ -61,4 +68,5 @@ class VirtualTemperatureSensor:
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
+    """Keep a value inside the configured range."""
     return max(minimum, min(maximum, value))

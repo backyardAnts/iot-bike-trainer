@@ -1,12 +1,16 @@
-"""Default rider profile used by the local decision layer."""
+"""Default rider profile used by the local decision layer.
+
+This is the fallback rider data until a real athlete profile is supplied from
+the backend or dashboard.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
 from config_layer.settings import USER_AGE
-## this file is used as tmp to get the user values we will than make them dynamic and use as input
 
+# Keep this small because callers usually copy it and add session-specific data.
 DEFAULT_RIDER_PROFILE: dict[str, Any] = {
     "rider_id": "rider_001",
     "age": USER_AGE,

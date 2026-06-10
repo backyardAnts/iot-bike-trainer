@@ -1,4 +1,8 @@
-"""Build and send session analytics reports when workouts stop."""
+"""Build and send session analytics reports when workouts stop.
+
+The backend calls this after it receives a stopped session status. It gathers
+sensor readings, decisions, and session metadata into one email-ready report.
+"""
 
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ URGENT_WORKOUT_ACTIONS = {
     "reduce_effort",
     "near_limit",
 }
+# These actions are counted separately so reports can show useful coaching trends.
 TRACKED_FEEDBACK_ACTIONS = {
     "recover",
     "reduce_speed",
@@ -50,6 +55,7 @@ def process_stopped_session_report(
     if session_id is None:
         return None
 
+    # A stopped status can be delivered more than once by MQTT, so guard early.
     if get_session_report_email_record(session_id) is not None:
         print(f"Workout report already processed for {session_id}; skipping email.")
         return {
@@ -70,6 +76,7 @@ def process_stopped_session_report(
         body,
         athlete_id=report.get("athlete_id"),
     ):
+        # reserve_session_report_email protects against two workers racing.
         print(f"Workout report already reserved for {session_id}; skipping email.")
         return {
             "session_id": session_id,
@@ -77,6 +84,7 @@ def process_stopped_session_report(
         }
 
     try:
+        # Email failure should not erase the analytics summary.
         save_session_analytics(report)
     except Exception as exc:
         print(f"Failed to save session analytics for {session_id}: {exc}")
@@ -115,6 +123,7 @@ def generate_session_report(
     stopped_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Calculate a complete report for one stopped session."""
+    # Comparison is based on earlier sessions with the same workout type.
     current = _calculate_session_metrics(session_id, stopped_status)
     comparison = _build_same_workout_comparison(current)
     current["comparison"] = comparison
@@ -143,6 +152,7 @@ def _send_report_email(
     html_body: str,
 ) -> dict[str, Any]:
     """Send a report while preserving compatibility with two-argument senders."""
+    # Tests and older callers may pass a sender that only accepts subject/body.
     try:
         signature = inspect.signature(email_sender)
     except (TypeError, ValueError):
@@ -179,6 +189,7 @@ def _calculate_session_metrics(
     session_id: str,
     stopped_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Load raw rows and assemble the full report dictionary."""
     readings = _load_readings_for_session(session_id)
     decisions = _load_decision_logs_for_session(session_id)
     session_row = _load_session_row(session_id)
@@ -196,6 +207,7 @@ def _calculate_session_metrics(
     feedback = _calculate_feedback(decisions)
 
     return {
+        # Top-level aliases are kept for older analytics/storage code.
         "session_id": session_id,
         "athlete_id": info["athlete_id"],
         "device_id": info["device_id"],
@@ -238,15 +250,18 @@ def _build_session_info(
     stopped_status: dict[str, Any] | None,
     sample_seconds: int,
 ) -> dict[str, Any]:
+    """Choose the best available metadata for the report header."""
     first_reading = readings[0] if readings else {}
     last_reading = readings[-1] if readings else {}
     device_id = (
+        # Stopped status is newest, then session row, then first reading.
         _status_value(stopped_status, "device_id")
         or _non_empty_string(session_row.get("device_id") if session_row else None)
         or _non_empty_string(first_reading.get("device_id"))
         or ""
     )
     athlete_id = (
+        # Athlete ID can appear in several tables depending on how the ride began.
         _status_athlete_id(stopped_status)
         or _to_optional_int(session_row.get("athlete_id") if session_row else None)
         or _to_optional_int(first_reading.get("athlete_id"))
@@ -292,6 +307,7 @@ def _calculate_performance(
     readings: list[dict[str, Any]],
     sample_seconds: int,
 ) -> dict[str, Any]:
+    """Calculate speed, cadence, heart-rate, and distance metrics."""
     if not readings:
         return {
             "top_speed_kmh": 0.0,
@@ -336,6 +352,7 @@ def _calculate_safety(
     readings: list[dict[str, Any]],
     decisions: list[dict[str, Any]],
 ) -> dict[str, int]:
+    """Count side warnings and urgent workload warnings."""
     source = decisions if decisions else readings
     left = _count_warning_side(source, "left")
     right = _count_warning_side(source, "right")
@@ -358,6 +375,7 @@ def _calculate_safety(
 
 
 def _calculate_feedback(decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize the actions the decision layer recommended most often."""
     actions = [
         str(decision.get("recommended_action", "")).strip().lower()
         for decision in decisions
@@ -398,12 +416,14 @@ def _select_notable_decisions(decisions: list[dict[str, Any]]) -> list[dict[str,
         notable.append(_compact_decision(decision))
 
     if not notable and decisions:
+        # If every decision was routine, include the last few so the report is not empty.
         notable = [_compact_decision(decision) for decision in decisions[-3:]]
 
     return notable[-5:]
 
 
 def _compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
+    """Keep only the fields that are useful in the email report."""
     return {
         "timestamp": str(decision.get("timestamp", "")),
         "decision_type": str(decision.get("decision_type", "")),
@@ -416,6 +436,7 @@ def _compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
 
 
 def _build_same_workout_comparison(current: dict[str, Any]) -> dict[str, Any]:
+    """Compare this ride with earlier rides of the same workout type."""
     workout_type = str(current.get("workout_type", ""))
     athlete_id = _to_optional_int(current.get("athlete_id"))
     previous_session_ids = _list_previous_session_ids_same_workout(
@@ -424,6 +445,7 @@ def _build_same_workout_comparison(current: dict[str, Any]) -> dict[str, Any]:
         athlete_id,
     )
     previous_reports = [
+        # Recalculate previous reports so comparison uses the same code path.
         _calculate_session_metrics(previous_session_id)
         for previous_session_id in previous_session_ids
     ]
@@ -464,6 +486,7 @@ def _build_same_workout_comparison(current: dict[str, Any]) -> dict[str, Any]:
 
 
 def _average_report(reports: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build an averaged baseline from previous same-type workouts."""
     return {
         "session_id": "average_previous",
         "performance": {
@@ -490,6 +513,7 @@ def _compare_reports(
     current: dict[str, Any],
     baseline: dict[str, Any],
 ) -> dict[str, Any]:
+    """Return metric deltas between the current report and one baseline."""
     return {
         "session_id": baseline.get("session_id"),
         "top_speed_kmh_delta": _delta(
@@ -524,6 +548,7 @@ def _compare_reports(
 
 
 def _format_comparison_line(label: str, comparison: dict[str, Any]) -> str:
+    """Format one plain-text comparison line."""
     if comparison.get("session_id") is None:
         return f"- {label}: no data"
     return (
@@ -535,6 +560,7 @@ def _format_comparison_line(label: str, comparison: dict[str, Any]) -> str:
 
 
 def _empty_comparison() -> dict[str, Any]:
+    """Return the comparison shape when there is no baseline data."""
     return {
         "session_id": None,
         "top_speed_kmh_delta": None,
@@ -548,6 +574,7 @@ def _empty_comparison() -> dict[str, Any]:
 
 
 def _load_readings_for_session(session_id: str) -> list[dict[str, Any]]:
+    """Load sensor rows for one session in ride order."""
     with get_db_connection() as connection:
         rows = connection.execute(
             """
@@ -563,6 +590,7 @@ def _load_readings_for_session(session_id: str) -> list[dict[str, Any]]:
 
 
 def _load_decision_logs_for_session(session_id: str) -> list[dict[str, Any]]:
+    """Load decision rows for one session in ride order."""
     with get_db_connection() as connection:
         rows = connection.execute(
             """
@@ -578,6 +606,7 @@ def _load_decision_logs_for_session(session_id: str) -> list[dict[str, Any]]:
 
 
 def _load_session_row(session_id: str) -> dict[str, Any] | None:
+    """Load the latest session metadata row, if one exists."""
     with get_db_connection() as connection:
         row = connection.execute(
             """
@@ -598,10 +627,12 @@ def _list_previous_session_ids_same_workout(
     workout_type: str,
     athlete_id: int | None,
 ) -> list[str]:
+    """Find earlier sessions for the same workout and athlete, newest first."""
     if not workout_type:
         return []
 
     current_first_id = _get_first_reading_id(current_session_id)
+    # Only compare to sessions that happened before the current one.
     latest_allowed_id = current_first_id if current_first_id is not None else 10**18
     with get_db_connection() as connection:
         if athlete_id is None:
@@ -653,6 +684,7 @@ def _list_previous_session_ids_same_workout(
 
 
 def _get_first_reading_id(session_id: str) -> int | None:
+    """Return the first sensor_readings row ID for chronological comparisons."""
     with get_db_connection() as connection:
         row = connection.execute(
             """
@@ -669,6 +701,7 @@ def _get_first_reading_id(session_id: str) -> int | None:
 
 
 def _count_warning_side(items: list[dict[str, Any]], side: str) -> int:
+    """Count warnings for one side from either decision logs or raw readings."""
     count = 0
     for item in items:
         alert_side = str(item.get("alert_side", "")).strip().lower()
@@ -682,6 +715,7 @@ def _count_warning_side(items: list[dict[str, Any]], side: str) -> int:
 
 
 def _most_common_workout_type(decisions: list[dict[str, Any]]) -> str | None:
+    """Infer workout type from decision logs when session status is missing it."""
     workout_types = [
         str(decision.get("workout_type", "")).strip()
         for decision in decisions
@@ -693,6 +727,7 @@ def _most_common_workout_type(decisions: list[dict[str, Any]]) -> str | None:
 
 
 def _most_common_athlete_id(decisions: list[dict[str, Any]]) -> int | None:
+    """Infer athlete ID from decision logs when session metadata is incomplete."""
     athlete_ids = [
         athlete_id
         for athlete_id in (
@@ -707,6 +742,7 @@ def _most_common_athlete_id(decisions: list[dict[str, Any]]) -> int | None:
 
 
 def _estimate_distance_km(speeds: list[float], sample_seconds: int) -> float:
+    """Estimate distance by treating each speed sample as a short time slice."""
     if not speeds:
         return 0.0
     distance = sum(speed * (sample_seconds / 3600.0) for speed in speeds)
@@ -714,6 +750,7 @@ def _estimate_distance_km(speeds: list[float], sample_seconds: int) -> float:
 
 
 def _estimate_sample_seconds(readings: list[dict[str, Any]]) -> int:
+    """Estimate sample interval from valid timestamp gaps."""
     timestamps = _parse_reading_timestamps(readings)
     intervals = [
         int((timestamps[index] - timestamps[index - 1]).total_seconds())
@@ -731,6 +768,7 @@ def _calculate_duration_seconds(
     end_timestamp: str,
     sample_seconds: int,
 ) -> int:
+    """Calculate duration from explicit start/end times, or sample count."""
     start = _parse_timestamp(start_timestamp)
     end = _parse_timestamp(end_timestamp)
     if start is not None and end is not None and end >= start:
@@ -739,6 +777,7 @@ def _calculate_duration_seconds(
 
 
 def _parse_reading_timestamps(readings: list[dict[str, Any]]) -> list[datetime]:
+    """Parse timestamps from reading rows and skip invalid ones."""
     timestamps = []
     for reading in readings:
         parsed = _parse_timestamp(str(reading.get("timestamp", "")))
@@ -748,6 +787,7 @@ def _parse_reading_timestamps(readings: list[dict[str, Any]]) -> list[datetime]:
 
 
 def _parse_timestamp(timestamp: str) -> datetime | None:
+    """Parse ISO timestamps, including values ending in Z."""
     timestamp = str(timestamp).strip()
     if not timestamp:
         return None
@@ -758,6 +798,7 @@ def _parse_timestamp(timestamp: str) -> datetime | None:
 
 
 def _count_heart_rate_zones(heart_rates: list[int]) -> dict[str, int]:
+    """Count samples in the simple heart-rate effort zones used by reports."""
     zone_counts = {
         "easy": 0,
         "moderate": 0,
@@ -777,6 +818,7 @@ def _count_heart_rate_zones(heart_rates: list[int]) -> dict[str, int]:
 
 
 def _format_duration(seconds: int) -> str:
+    """Format seconds as a compact human-readable duration."""
     seconds = max(0, int(seconds))
     minutes, remaining_seconds = divmod(seconds, 60)
     hours, remaining_minutes = divmod(minutes, 60)
@@ -788,18 +830,21 @@ def _format_duration(seconds: int) -> str:
 
 
 def _status_value(status: dict[str, Any] | None, key: str) -> str | None:
+    """Read a non-empty string field from a status payload."""
     if status is None:
         return None
     return _non_empty_string(status.get(key))
 
 
 def _status_athlete_id(status: dict[str, Any] | None) -> int | None:
+    """Read athlete/user ID from a status payload."""
     if status is None:
         return None
     return _to_optional_int(status.get("athlete_id") or status.get("user_id"))
 
 
 def _non_empty_string(value: Any) -> str | None:
+    """Return stripped text, or None for blank values."""
     if value is None:
         return None
     text = str(value).strip()
@@ -807,11 +852,13 @@ def _non_empty_string(value: Any) -> str | None:
 
 
 def _is_valid_heart_rate(value: Any) -> bool:
+    """Return True for plausible heart-rate values."""
     heart_rate = _to_int(value, 0)
     return 40 <= heart_rate <= 220
 
 
 def _to_float(value: Any, default: float) -> float:
+    """Convert to float with a fallback for messy stored values."""
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -819,6 +866,7 @@ def _to_float(value: Any, default: float) -> float:
 
 
 def _to_int(value: Any, default: int) -> int:
+    """Convert to int with a fallback, excluding booleans."""
     if isinstance(value, bool):
         return default
     try:
@@ -828,6 +876,7 @@ def _to_int(value: Any, default: int) -> int:
 
 
 def _to_optional_int(value: Any) -> int | None:
+    """Convert to a positive int, or return None."""
     if isinstance(value, bool):
         return None
     try:
@@ -838,10 +887,12 @@ def _to_optional_int(value: Any) -> int | None:
 
 
 def _delta(current_value: Any, baseline_value: Any) -> float:
+    """Return a rounded current-minus-baseline difference."""
     return round(float(current_value) - float(baseline_value), 1)
 
 
 def _get_athlete_id_for_session(session_id: str) -> int | None:
+    """Find athlete ID for a session from any table that has it."""
     with get_db_connection() as connection:
         for table in ("sessions", "sensor_readings", "decision_logs"):
             row = connection.execute(

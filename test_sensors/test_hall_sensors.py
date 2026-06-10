@@ -1,4 +1,8 @@
-"""Simple GrovePi Hall effect sensor test for D3 and D4."""
+"""Simple GrovePi Hall effect sensor test for D3 and D4.
+
+This only checks raw state changes, which is the fastest way to prove the
+magnet and Hall module are wired correctly.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ DEFAULT_SPEED_PORT = 3
 DEFAULT_CADENCE_PORT = 4
 DEFAULT_INTERVAL_SECONDS = 0.2
 GROVEPI_PATHS = (
+    # Common GrovePi install paths on the Raspberry Pi image.
     "/home/pi/Dexter/GrovePi/Software/Python",
     "/home/pi/Dexter/GrovePi/Software/Python/grovepi",
 )
@@ -24,6 +29,7 @@ def import_grovepi() -> Any:
 
         return grovepi
     except ImportError:
+        # Try the paths used by the standard Dexter GrovePi installation.
         for path in GROVEPI_PATHS:
             if path not in sys.path:
                 sys.path.append(path)
@@ -71,6 +77,7 @@ def print_event(label: str, port: int, total: int) -> None:
 
 
 def main() -> None:
+    """Print raw Hall states and count every state change."""
     parser = argparse.ArgumentParser(description="Test GrovePi Hall sensors.")
     parser.add_argument("--speed-port", type=int, default=DEFAULT_SPEED_PORT)
     parser.add_argument("--cadence-port", type=int, default=DEFAULT_CADENCE_PORT)
@@ -94,6 +101,7 @@ def main() -> None:
             speed_raw = read_raw_state(grovepi, args.speed_port, "SPEED")
             cadence_raw = read_raw_state(grovepi, args.cadence_port, "CADENCE")
 
+            # Any raw-value change means the magnet affected the sensor.
             if (
                 previous_speed_raw is not None
                 and speed_raw is not None
@@ -114,6 +122,7 @@ def main() -> None:
             print_state("CADENCE", args.cadence_port, cadence_raw, cadence_events)
 
             if speed_raw is not None:
+                # Do not overwrite the previous good value with a failed read.
                 previous_speed_raw = speed_raw
             if cadence_raw is not None:
                 previous_cadence_raw = cadence_raw

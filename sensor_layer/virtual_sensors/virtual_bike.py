@@ -1,4 +1,8 @@
-"""Composite virtual bike that exposes one JSON-ready sensor reading."""
+"""Composite virtual bike that exposes one JSON-ready sensor reading.
+
+The virtual bike lets the rest of the project run without Raspberry Pi
+hardware by producing realistic, stateful sensor messages.
+"""
 
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ class VirtualBike:
         random_seed: int | None = settings.DEFAULT_RANDOM_SEED,
         session_counter_file: str | Path | None = None,
     ) -> None:
+        """Create all virtual sensors and assign a session ID."""
         self.device_id = device_id
         self.workout_type = DEFAULT_WORKOUT_TYPE
         self.set_workout_type(workout_type or DEFAULT_WORKOUT_TYPE)
@@ -47,6 +52,8 @@ class VirtualBike:
         self.alert_side = settings.DEFAULT_ALERT_SIDE
         self.session_active = False
 
+        # One master seed makes the whole bike repeatable, while child RNGs stop
+        # one sensor from consuming random values intended for another sensor.
         master_rng = random.Random(random_seed)
         self.speed_sensor = VirtualSpeedSensor(rng=_make_child_rng(master_rng))
         self.cadence_sensor = VirtualCadenceSensor(rng=_make_child_rng(master_rng))
@@ -70,6 +77,7 @@ class VirtualBike:
 
     def update(self) -> dict[str, Any]:
         """Update all sensors in dependency order and return the message."""
+        # Speed drives mode, mode helps cadence, and both affect heart rate.
         speed_kmh = self.speed_sensor.update()
         riding_mode = self.speed_sensor.riding_mode
         cadence_rpm = self.cadence_sensor.update(speed_kmh, riding_mode)
@@ -170,10 +178,12 @@ class VirtualBike:
 
 
 def _make_child_rng(master_rng: random.Random) -> random.Random:
+    """Create an independent random generator from the master generator."""
     return random.Random(master_rng.randrange(0, 2**32))
 
 
 def _normalize_alert_level(alert_level: str) -> str:
+    """Keep alert levels within the shared schema values."""
     value = str(alert_level).strip().lower()
     if value in settings.ALLOWED_ALERT_LEVELS:
         return value
@@ -181,6 +191,7 @@ def _normalize_alert_level(alert_level: str) -> str:
 
 
 def _normalize_alert_side(alert_side: str) -> str:
+    """Keep alert sides within the shared schema values."""
     value = str(alert_side).strip().lower()
     if value in settings.ALLOWED_ALERT_SIDES:
         return value
@@ -193,6 +204,7 @@ def _resolve_display_active(
     speaker_message: str,
     alert_level: str,
 ) -> bool:
+    """Decide whether the virtual display should be marked active."""
     if display_active is not None:
         return _coerce_bool(display_active)
 
@@ -204,6 +216,7 @@ def _resolve_display_active(
 
 
 def _coerce_bool(value: bool | str) -> bool:
+    """Convert booleans and common truthy strings to bool."""
     if isinstance(value, bool):
         return value
 
@@ -211,4 +224,5 @@ def _coerce_bool(value: bool | str) -> bool:
 
 
 def _should_display_be_active(display_message: str, alert_level: str) -> bool:
+    """Turn the display on when there is text or a warning state."""
     return bool(display_message or alert_level in {"warning", "danger"})

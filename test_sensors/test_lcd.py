@@ -1,4 +1,8 @@
-"""Simple Grove RGB LCD test through I2C."""
+"""Simple Grove RGB LCD test through I2C.
+
+The full bike uses short two-line LCD messages, so this script cycles through
+the same kind of display content and colors.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +24,7 @@ LCD_IMPORT_ERROR = None
 try:
     from grove_rgb_lcd import *
 except ImportError as first_import_error:
+    # Retry after adding common Grove LCD paths from Raspberry Pi installs.
     LCD_IMPORT_ERROR = first_import_error
     for grove_lcd_path in GROVE_LCD_PATHS:
         if grove_lcd_path not in sys.path:
@@ -65,6 +70,7 @@ def safe_set_rgb(
 
 def safe_set_text(set_text: Callable[[str], Any], line_one: str, line_two: str) -> None:
     """Write two LCD lines without crashing the script."""
+    # Printing the same text helps when the LCD is connected but hard to read.
     message = "{}\n{}".format(line_one, line_two)
     print("LCD MESSAGE:")
     print(line_one)
@@ -95,12 +101,14 @@ def clear_lcd(set_text: Callable[[str], Any]) -> None:
 
 
 def main() -> None:
+    """Cycle through sample LCD messages until Ctrl+C."""
     parser = argparse.ArgumentParser(description="Test Grove RGB LCD.")
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_SECONDS)
     args = parser.parse_args()
 
     set_text, set_rgb = get_lcd_functions()
     messages = (
+        # Line length is kept near the 16-character hardware limit.
         ("BIKE READY", "LCD TEST OK", (0, 128, 64)),
         ("Speed: 25 km/h", "Cad: 80 rpm", (0, 64, 255)),
         ("ALERT LEFT", "Car detected", (255, 0, 0)),
@@ -113,12 +121,14 @@ def main() -> None:
     try:
         index = 0
         while True:
+            # Rotate messages so both color and text updates are tested.
             show_message(set_text, set_rgb, messages[index])
             index = (index + 1) % len(messages)
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\nStopping LCD test.")
     finally:
+        # Clear the display so stale test text is not left behind.
         clear_lcd(set_text)
 
 

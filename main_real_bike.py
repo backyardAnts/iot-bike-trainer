@@ -1,4 +1,8 @@
-"""Convenience entry point for real Raspberry Pi/GrovePi bike mode."""
+"""Convenience entry point for real Raspberry Pi/GrovePi bike mode.
+
+This file keeps the real-hardware command line small and passes the actual
+work to ``run_real_mode`` in ``main_virtual_bike.py``.
+"""
 
 from __future__ import annotations
 
@@ -20,13 +24,16 @@ def run_lcd_test(lcd_debug: bool = False) -> None:
 
     lcd = LcdController(enabled=True, debug=lcd_debug)
     try:
+        # This is only a hardware smoke test, so it writes one fixed message.
         lcd.display("LCD TEST", "Hello Bike")
         time.sleep(5.0)
     finally:
+        # Always release the LCD even if the sleep is interrupted.
         lcd.cleanup()
 
 
 def parse_args() -> argparse.Namespace:
+    """Read options for the Raspberry Pi runner."""
     parser = argparse.ArgumentParser(description="Real GrovePi bike sensor runner")
     parser.add_argument(
         "--mqtt",
@@ -138,9 +145,11 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = parse_args()
     if args.lcd_test:
+        # LCD test mode should not start the bike loop.
         run_lcd_test(lcd_debug=args.lcd_debug)
         raise SystemExit(0)
 
+    # Most flags are passed through because run_real_mode is shared by tests too.
     run_real_mode(
         workout_type=args.workout,
         session_id=args.session_id,

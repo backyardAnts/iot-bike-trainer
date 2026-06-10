@@ -1,4 +1,8 @@
-"""Stateful virtual cadence sensor."""
+"""Stateful virtual cadence sensor.
+
+Cadence follows speed and riding mode, with occasional low/high anomalies so
+the decision layer has realistic cases to react to.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ class VirtualCadenceSensor:
     """Simulate pedaling cadence that follows speed and riding mode."""
 
     _MODE_TARGET_RANGES = {
+        # Target cadence ranges are in RPM.
         "stopped": (0.0, 0.0),
         "easy": (50.0, 75.0),
         "cruising": (75.0, 95.0),
@@ -25,6 +30,7 @@ class VirtualCadenceSensor:
         max_cadence: int = MAX_CADENCE_RPM,
         rng: random.Random | None = None,
     ) -> None:
+        """Set cadence limits and reset target/anomaly state."""
         self.min_cadence = int(min_cadence)
         self.max_cadence = int(max_cadence)
         self._rng = rng or random.Random()
@@ -38,6 +44,7 @@ class VirtualCadenceSensor:
     def update(self, speed_kmh: float, riding_mode: str) -> int:
         """Update cadence using current speed and riding mode."""
         if speed_kmh <= 0.5:
+            # No wheel movement means cadence should decay back to zero.
             self._target_cadence_rpm = 0.0
             self._target_updates_remaining = 1
             self._anomaly_updates_remaining = 0
@@ -69,9 +76,11 @@ class VirtualCadenceSensor:
         return int(round(self.current_cadence_rpm))
 
     def _choose_new_target(self, speed_kmh: float, riding_mode: str) -> None:
+        """Choose the next cadence target from mode, speed, and rare anomalies."""
         mode = riding_mode if riding_mode in self._MODE_TARGET_RANGES else "easy"
 
         if self._anomaly_updates_remaining <= 0 and self._rng.random() < 0.05:
+            # Small anomaly windows create "pedal faster/slow cadence" test data.
             self._anomaly_type = self._rng.choice(["low", "high"])
             self._anomaly_updates_remaining = self._rng.randint(2, 5)
 
@@ -88,6 +97,7 @@ class VirtualCadenceSensor:
             self._anomaly_type = None
 
         if speed_kmh < 4.0:
+            # Very slow speed should not produce high cadence numbers.
             self._target_cadence_rpm = min(self._target_cadence_rpm, 45.0)
         elif speed_kmh < 8.0:
             self._target_cadence_rpm = min(self._target_cadence_rpm, 62.0)
@@ -101,5 +111,5 @@ class VirtualCadenceSensor:
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
+    """Keep a value inside the configured range."""
     return max(minimum, min(maximum, value))
-

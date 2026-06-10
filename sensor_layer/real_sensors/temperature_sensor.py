@@ -1,4 +1,8 @@
-"""Production GrovePi temperature and humidity sensor wrapper."""
+"""Production GrovePi temperature and humidity sensor wrapper.
+
+The DHT sensor needs slow polling and can return invalid values, so this class
+uses cached/default readings whenever a fresh hardware read is not safe.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +24,7 @@ class TemperatureSensor(object):
         min_read_interval_seconds: float = 2.0,
         debug: bool = False,
     ) -> None:
+        """Configure DHT sensor options and cached fallback state."""
         self.port = int(port)
         self.sensor_type = int(sensor_type)
         self.fallback_temperature_c = float(fallback_temperature_c)
@@ -44,6 +49,7 @@ class TemperatureSensor(object):
         """Return temperature_c and humidity_percent with safe fallbacks."""
         now = time.monotonic()
         if now - self._last_read_time < self.min_read_interval_seconds:
+            # Grove DHT sensors should not be hammered; reuse the last reading.
             if self._last_temperature_c is not None:
                 return self._reading_from_cache(fallback_used=False)
             return self._fallback(fallback_used=False)
@@ -93,6 +99,7 @@ class TemperatureSensor(object):
         }
 
     def _fallback(self, fallback_used: bool) -> Dict[str, Optional[float]]:
+        """Return a cached reading, or the configured default if none exists."""
         if self._last_temperature_c is not None:
             if self.debug:
                 print(
@@ -118,6 +125,7 @@ class TemperatureSensor(object):
         }
 
     def _reading_from_cache(self, fallback_used: bool) -> Dict[str, Optional[float]]:
+        """Return the last good temperature/humidity pair."""
         if self.debug:
             print(
                 "TEMP DEBUG: D{} sensor_type={} cached_temp={} cached_humidity={} fallback={}".format(
@@ -134,6 +142,7 @@ class TemperatureSensor(object):
         }
 
     def _clean_temperature_c(self, value: Any) -> Optional[float]:
+        """Accept only plausible Celsius readings."""
         number = self._clean_number(value)
         if number is None:
             return None
@@ -142,6 +151,7 @@ class TemperatureSensor(object):
         return number
 
     def _clean_humidity_percent(self, value: Any) -> Optional[float]:
+        """Accept only plausible humidity percentages."""
         number = self._clean_number(value)
         if number is None:
             return None
@@ -150,6 +160,7 @@ class TemperatureSensor(object):
         return number
 
     def _clean_number(self, value: Any) -> Optional[float]:
+        """Convert numeric sensor output and reject NaN/inf."""
         if value is None:
             return None
 
@@ -164,12 +175,14 @@ class TemperatureSensor(object):
         return number
 
     def _warn_once(self, message: str) -> None:
+        """Print a setup warning once."""
         if message == self._last_error:
             return
         self._last_error = message
         print(message)
 
     def _warn_occasionally(self, message: str) -> None:
+        """Throttle repeated read warnings from a noisy sensor."""
         now = time.monotonic()
         if message == self._last_error and now - self._last_warning_time < 10.0:
             return

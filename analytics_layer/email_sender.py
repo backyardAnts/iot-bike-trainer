@@ -1,4 +1,8 @@
-"""SMTP email sender for workout summary reports."""
+"""SMTP email sender for workout summary reports.
+
+Email is optional in local development; when it is disabled this module prints
+the report and returns a structured "skipped" result instead of failing.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +20,7 @@ def send_session_report_email(
     html_body: str | None = None,
 ) -> dict[str, Any]:
     """Send a workout report email, or return a safe skipped/failed result."""
+    # Default to disabled so local runs never need SMTP credentials.
     if not _env_bool("EMAIL_ENABLED", False):
         print("EMAIL_ENABLED is false; generated workout report but skipped email send.")
         print(body)
@@ -43,6 +48,7 @@ def send_session_report_email(
         if not value
     ]
     if missing:
+        # Fail cleanly with a message that tells the user exactly what is missing.
         error = "Missing email configuration: {}".format(", ".join(missing))
         print(error)
         return {
@@ -58,10 +64,12 @@ def send_session_report_email(
     message["To"] = email_to
     message.set_content(body)
     if html_body:
+        # Keep a plain-text body for email clients that block HTML.
         message.add_alternative(html_body, subtype="html")
 
     try:
         with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as smtp:
+            # Most hosted SMTP servers expect STARTTLS on port 587.
             smtp.starttls()
             if username:
                 smtp.login(username, password)
@@ -86,6 +94,7 @@ def send_session_report_email(
 
 
 def _env_bool(name: str, default: bool) -> bool:
+    """Read a boolean environment variable using common truthy values."""
     value = os.getenv(name)
     if value is None or value.strip() == "":
         return default
@@ -94,6 +103,7 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _env_int(name: str, default: int) -> int:
+    """Read an integer environment variable with a fallback."""
     value = os.getenv(name)
     if value is None or value.strip() == "":
         return default

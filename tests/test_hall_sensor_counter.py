@@ -1,4 +1,8 @@
-"""Tests for production Hall speed/cadence interval smoothing."""
+"""Tests for production Hall speed/cadence interval smoothing.
+
+These tests replace GrovePi and time with fakes so pulse timing can be checked
+without Raspberry Pi hardware.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,10 @@ from sensor_layer.real_sensors import hall_sensor_counter as hall_module
 
 
 class HallSensorCounterTest(unittest.TestCase):
+    """Unit tests for debouncing, timeout, and missed-pulse smoothing."""
+
     def setUp(self) -> None:
+        """Patch GrovePi and monotonic time with deterministic fakes."""
         self.fake_grovepi = _FakeGrovePi()
         self.clock = _FakeClock()
         self.load_patch = mock.patch.object(
@@ -26,6 +33,7 @@ class HallSensorCounterTest(unittest.TestCase):
         self.time_patch.start()
 
     def tearDown(self) -> None:
+        """Restore patched imports and time functions."""
         self.time_patch.stop()
         self.load_patch.stop()
 
@@ -99,6 +107,7 @@ class HallSensorCounterTest(unittest.TestCase):
         self.assertAlmostEqual(measurement["rotations_per_second"], 2.0, places=2)
 
     def _make_counter(self, magnets_per_rotation: int = 1) -> hall_module.HallSensorCounter:
+        """Create a counter wired to the fake GrovePi object."""
         return hall_module.HallSensorCounter(
             port=3,
             label="Speed",
@@ -106,6 +115,7 @@ class HallSensorCounterTest(unittest.TestCase):
         )
 
     def _prime_normal_state(self, counter: hall_module.HallSensorCounter) -> None:
+        """Set the initial non-magnet state before pulses are simulated."""
         self._set_state(counter, 0.000, 1)
 
     def _pulse(
@@ -113,6 +123,7 @@ class HallSensorCounterTest(unittest.TestCase):
         counter: hall_module.HallSensorCounter,
         pulse_time: float,
     ) -> None:
+        """Simulate one falling edge into the magnet-detected state."""
         self._set_state(counter, pulse_time - 0.001, 1)
         self._set_state(counter, pulse_time, 0)
 
@@ -122,12 +133,15 @@ class HallSensorCounterTest(unittest.TestCase):
         now: float,
         state: int,
     ) -> None:
+        """Move fake time and fake digital input before polling once."""
         self.clock.now = now
         self.fake_grovepi.state = state
         counter.poll_once()
 
 
 class _FakeClock(object):
+    """Controllable replacement for time.monotonic."""
+
     def __init__(self) -> None:
         self.now = 0.0
 
@@ -136,6 +150,8 @@ class _FakeClock(object):
 
 
 class _FakeGrovePi(object):
+    """Tiny GrovePi fake with one digital input state."""
+
     def __init__(self) -> None:
         self.state = 1
         self.modes = {}

@@ -1,4 +1,8 @@
-"""Compare current session analytics with a previous session."""
+"""Compare current session analytics with a previous session.
+
+The comparison is intentionally small: it turns the main metric differences
+into one sentence that can be shown in reports.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ def compare_session_performance(
     previous_session: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Return a simple performance comparison summary."""
+    # Without a previous ride, there is nothing fair to compare against.
     if not previous_session or previous_session.get("total_readings", 0) == 0:
         return {
             "message": "Not enough previous data",
@@ -32,6 +37,7 @@ def compare_session_performance(
     )
 
     if speed_delta > 0.5 and heart_rate_delta <= 3:
+        # Faster without a large heart-rate jump is treated as improvement.
         message = "Performance improved"
     elif speed_delta < -0.5 and heart_rate_delta > 3:
         message = "Possible fatigue detected"
@@ -47,4 +53,5 @@ def compare_session_performance(
 
 
 def _round_delta(value: float) -> float:
+    """Keep comparison numbers readable in reports."""
     return round(float(value), 1)

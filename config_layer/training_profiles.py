@@ -1,12 +1,17 @@
-"""Training profile definitions for workout-type selection."""
+"""Training profile definitions for workout-type selection.
+
+Each profile tells the decision layer which metric matters most for that kind
+of ride.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
-## this part just defines how each workout type has a different goal
+# Used when the user does not choose a workout mode explicitly.
 DEFAULT_WORKOUT_TYPE = "endurance"
 
+# These targets are intentionally simple; the analyzer turns them into feedback.
 TRAINING_PROFILES: dict[str, dict[str, Any]] = {
     "speed": {
         "display_name": "Speed Training",

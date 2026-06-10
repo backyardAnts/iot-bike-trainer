@@ -1,4 +1,7 @@
-"""General settings and simulation limits for the bike trainer project."""
+"""General settings and simulation limits for the bike trainer project.
+
+Most values have safe defaults so the project can run without a local ``.env``.
+"""
 
 from __future__ import annotations
 
@@ -7,13 +10,16 @@ import os
 try:
     from dotenv import load_dotenv
 except ImportError:
+    # python-dotenv is helpful in development, but the app can run without it.
     load_dotenv = None
 
 if load_dotenv is not None:
+    # Load local overrides such as MQTT_BROKER_HOST when a .env file is present.
     load_dotenv()
 
 
 def _env_int(name: str, default: int) -> int:
+    """Read an integer environment variable, falling back on bad input."""
     value = os.getenv(name)
     if value is None or value.strip() == "":
         return default
@@ -25,6 +31,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _env_bool(name: str, default: bool) -> bool:
+    """Read a boolean environment variable using common truthy strings."""
     value = os.getenv(name)
     if value is None or value.strip() == "":
         return default
@@ -32,8 +39,7 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-## here we are trying to load the dotenc enviroment, if .env does not exist we use the default values  for the mqtt broker...
-
+# Default device/session metadata used by both virtual and real bike messages.
 DEVICE_ID = "bike_001"
 DEFAULT_SESSION_ID = "session_001"
 DEFAULT_SAMPLE_INTERVAL_SECONDS = 1
@@ -47,6 +53,7 @@ DEFAULT_ALERT_SIDE = "none"
 ALLOWED_ALERT_LEVELS = ("normal", "info", "warning", "danger")
 ALLOWED_ALERT_SIDES = ("none", "left", "right", "both")
 
+# MQTT connection details can be overridden from the environment for local labs.
 MQTT_BROKER_HOST = os.getenv("MQTT_BROKER_HOST", "broker.hivemq.com")
 MQTT_BROKER_PORT = _env_int("MQTT_BROKER_PORT", 1883)
 MQTT_USERNAME = os.getenv("MQTT_USERNAME", "")
@@ -57,7 +64,8 @@ MQTT_CLIENT_ID_PREFIX = "anthony_bike_001"
 
 DEMO_AGE = _env_int("DEMO_AGE", 20)
 USER_AGE = _env_int("USER_AGE", DEMO_AGE)
-## everything below this part is just about adding max and minimum values for the VIRTUAL sensors since we started the project with virtual sensors. After adding the real sensors we will not be needing them anymore.
+
+# Virtual sensor ranges keep random data realistic during simulator runs.
 MIN_SPEED_KMH = 0
 MAX_SPEED_KMH = 35
 
@@ -78,11 +86,13 @@ HEART_RATE_MODE_RANGES_BPM = {
     "recovery": (95, 125),
 }
 
+# These weights decide how much speed and cadence influence simulated heart rate.
 HEART_RATE_INTENSITY_WEIGHTS = {
     "speed": 0.55,
     "cadence": 0.45,
 }
 
+# Heart rate movement settings make the virtual rider rise and recover gradually.
 HEART_RATE_STOPPED_SPEED_THRESHOLD_KMH = 0.5
 HEART_RATE_STOPPED_CADENCE_THRESHOLD_RPM = 5
 HEART_RATE_STOPPED_INTENSITY = 0.15

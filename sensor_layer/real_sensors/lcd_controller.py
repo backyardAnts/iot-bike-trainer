@@ -1,4 +1,8 @@
-"""Production Grove RGB LCD controller."""
+"""Production Grove RGB LCD controller.
+
+The LCD can fail to import or write depending on the Raspberry Pi setup, so the
+controller disables itself after errors instead of crashing the bike loop.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ LCD_IMPORT_ERROR = None
 try:
     from grove_rgb_lcd import *
 except ImportError as first_import_error:
+    # Retry after adding common Grove paths used on Raspberry Pi images.
     LCD_IMPORT_ERROR = first_import_error
     for grove_lcd_path in GROVE_LCD_PATHS:
         if grove_lcd_path not in sys.path:
@@ -32,6 +37,7 @@ class LcdController(object):
     """Write short two-line messages to the Grove I2C LCD."""
 
     def __init__(self, enabled: bool = True, debug: bool = False) -> None:
+        """Load LCD functions and remember whether writes are available."""
         self._set_text = None  # type: Optional[Callable[..., Any]]
         self._set_color = None  # type: Optional[Callable[..., Any]]
         self._color_function_name = ""  # type: str
@@ -73,6 +79,7 @@ class LcdController(object):
         line2 = self._short_line(line2)
         message = "{}\n{}".format(line1, line2)
         if message == self._last_message:
+            # Skip duplicate writes; the LCD bus is slow and sometimes fragile.
             return
 
         if self._set_color is not None:
@@ -120,6 +127,7 @@ class LcdController(object):
         Optional[Callable[..., Any]],
         str,
     ]:
+        """Find the LCD text and color functions exported by the library."""
         set_text = globals().get("setText")
         set_rgb = globals().get("setRGB")
         set_color = globals().get("setColor")
@@ -131,9 +139,11 @@ class LcdController(object):
         return set_text, None, ""
 
     def _short_line(self, value: str) -> str:
+        """Trim text to the 16-character Grove LCD line width."""
         return str(value)[:16]
 
     def _disable_with_warning(self, message: str) -> None:
+        """Disable LCD writes after an import or I/O error."""
         self.available = False
         self._set_text = None
         self._set_color = None
@@ -141,12 +151,14 @@ class LcdController(object):
         self._warn_once(message)
 
     def _warn_color_once(self, message: str) -> None:
+        """Print the color warning once but keep text writes enabled."""
         if self._color_error_printed:
             return
         self._color_error_printed = True
         print(message)
 
     def _warn_once(self, message: str) -> None:
+        """Print the first fatal LCD warning only."""
         if self._last_error:
             return
         self._last_error = message

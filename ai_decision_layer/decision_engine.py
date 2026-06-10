@@ -1,4 +1,8 @@
-"""Main rule-based decision engine for local simulator feedback."""
+"""Main rule-based decision engine for local simulator feedback.
+
+The engine checks immediate physical safety first, then falls back to workout
+coaching only when the bike area looks safe.
+"""
 
 from __future__ import annotations
 
@@ -18,11 +22,15 @@ class DecisionEngine:
     """Apply physical safety and workout rules to one sensor message."""
 
     def __init__(self, rider_profile: dict[str, Any] | None = None) -> None:
+        """Store the rider profile used for heart-rate thresholds."""
         self.rider_profile = rider_profile or get_default_rider_profile()
 
     def analyze(self, sensor_message: dict[str, Any]) -> DecisionResult:
         """Return the highest-priority decision for one sensor message."""
         workout_type = self._get_workout_type(sensor_message)
+
+        # Physical safety wins over training guidance because nearby objects
+        # should interrupt any normal workout advice.
         physical_feedback = decide_physical_feedback(
             {
                 **sensor_message,
@@ -32,6 +40,7 @@ class DecisionEngine:
         if _is_physical_safety_override(physical_feedback):
             return _physical_feedback_to_result(physical_feedback)
 
+        # At this point the surroundings are safe, so return workout coaching.
         return check_workout(
             sensor_message,
             workout_type,
@@ -39,6 +48,7 @@ class DecisionEngine:
         )
 
     def _get_workout_type(self, sensor_message: dict[str, Any]) -> str:
+        """Validate and normalize the workout type stored in a message."""
         workout_type = str(sensor_message.get("workout_type", "")).strip()
         if not is_valid_workout_type(workout_type):
             supported = "speed, cadence, endurance, vo2_max"
@@ -51,6 +61,7 @@ class DecisionEngine:
 
 
 def _is_physical_safety_override(feedback: dict[str, Any]) -> bool:
+    """Return True when physical feedback should override workout guidance."""
     alert_level = str(feedback.get("alert_level", "")).strip().lower()
     recommended_action = str(feedback.get("recommended_action", "")).strip().lower()
     return alert_level in {"warning", "danger"} or (
@@ -59,6 +70,7 @@ def _is_physical_safety_override(feedback: dict[str, Any]) -> bool:
 
 
 def _physical_feedback_to_result(feedback: dict[str, Any]) -> DecisionResult:
+    """Convert the older physical-feedback dictionary into DecisionResult."""
     return DecisionResult(
         alert_level=str(feedback["alert_level"]),
         alert_side=str(feedback["alert_side"]),

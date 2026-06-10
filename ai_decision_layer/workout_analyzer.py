@@ -1,4 +1,8 @@
-"""Workout-specific rule checks after physical safety is clear."""
+"""Workout-specific rule checks after physical safety is clear.
+
+These rules decide what short message belongs on the LCD after the bike has
+already passed the immediate obstacle checks.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +26,7 @@ HR_WARNING_ACTIONS = {
     "endurance": ("Reduce effort", "reduce_effort"),
     "vo2_max": ("Near limit", "near_limit"),
 }
+# Urgent actions trigger a short pulse so the rider notices the warning.
 URGENT_WORKOUT_ACTIONS = {
     "recover",
     "reduce_speed",
@@ -38,6 +43,7 @@ def check_workout(
     rider_profile: dict[str, Any],
 ) -> DecisionResult:
     """Return workout-specific LCD guidance for the current safe reading."""
+    # Validate first, then normalize readings into simple numeric values.
     get_training_profile(workout_type)
     speed_kmh = _to_float(sensor_message.get("speed_kmh"), 0.0)
     cadence_rpm = _to_int(sensor_message.get("cadence_rpm"), 0)
@@ -46,6 +52,8 @@ def check_workout(
         rider_profile,
     )
     lcd_line_1 = _format_lcd_status_line(speed_kmh, heart_rate_bpm, hr_percent)
+
+    # Heart-rate safety overrides the normal goal for every workout type.
     hr_override = _check_hr_override(
         workout_type,
         lcd_line_1,
@@ -106,6 +114,7 @@ def _check_endurance_workout(
     heart_rate_bpm: int,
     hr_percent: float | None,
 ) -> DecisionResult:
+    """Coach steady endurance effort mostly from heart-rate percentage."""
     if hr_percent is None:
         return _guidance_decision(
             workout_type,
@@ -153,6 +162,7 @@ def _check_speed_workout(
     heart_rate_bpm: int,
     hr_percent: float | None,
 ) -> DecisionResult:
+    """Coach speed sessions from the current speed reading."""
     if speed_kmh < 10.0:
         return _guidance_decision(
             workout_type,
@@ -191,6 +201,7 @@ def _check_cadence_workout(
     heart_rate_bpm: int,
     hr_percent: float | None,
 ) -> DecisionResult:
+    """Coach cadence sessions from the current cadence reading."""
     if cadence_rpm > 95:
         return _guidance_decision(
             workout_type,
@@ -228,6 +239,7 @@ def _check_vo2_max_workout(
     heart_rate_bpm: int,
     hr_percent: float | None,
 ) -> DecisionResult:
+    """Coach interval sessions from how close the rider is to high effort."""
     if hr_percent is None:
         return _guidance_decision(
             workout_type,
@@ -267,9 +279,11 @@ def _guidance_decision(
     hr_percent: float | None,
     alert_level: str = "info",
 ) -> DecisionResult:
+    """Create the common DecisionResult shape for workout guidance."""
     pulse_ms = 0
     pulse_reason = ""
     if recommended_action in URGENT_WORKOUT_ACTIONS:
+        # Do not leave the buzzer on; pulse it once for urgent guidance.
         pulse_ms = URGENT_WORKOUT_BUZZER_PULSE_MS
         pulse_reason = "hr_warning"
 
@@ -299,6 +313,7 @@ def _check_hr_override(
     heart_rate_bpm: int,
     hr_percent: float | None,
 ) -> DecisionResult | None:
+    """Return a heart-rate warning before normal workout advice is considered."""
     if hr_percent is None:
         return None
 
@@ -332,6 +347,7 @@ def _get_heart_rate_values(
     sensor_message: dict[str, Any],
     rider_profile: dict[str, Any],
 ) -> tuple[int, float | None]:
+    """Return both raw BPM and percent-of-max HR, if the reading is usable."""
     value = sensor_message.get("heart_rate_bpm")
     if not is_heart_rate_available(value):
         return 0, None
@@ -341,6 +357,7 @@ def _get_heart_rate_values(
 
 
 def _rounded_hr_percent(hr_percent: float | None) -> float | None:
+    """Keep stored heart-rate percentages compact and consistent."""
     if hr_percent is None:
         return None
     return round(float(hr_percent), 3)
@@ -351,6 +368,7 @@ def _format_lcd_status_line(
     heart_rate_bpm: int,
     hr_percent: float | None,
 ) -> str:
+    """Build a 16-character status line for the Grove LCD."""
     speed_text = f"{float(speed_kmh):.1f}"
     hr_text = str(heart_rate_bpm) if hr_percent is not None else "--"
     line = f"SPD {speed_text} HR {hr_text}"
@@ -364,6 +382,7 @@ def _format_lcd_status_line(
 
 
 def _to_float(value: Any, default: float) -> float:
+    """Convert a value to float while keeping a safe fallback."""
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -371,6 +390,7 @@ def _to_float(value: Any, default: float) -> float:
 
 
 def _to_int(value: Any, default: int) -> int:
+    """Convert a value to int while keeping booleans out."""
     if isinstance(value, bool):
         return default
     try:

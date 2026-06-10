@@ -1,4 +1,8 @@
-"""Stateful virtual bike speed sensor."""
+"""Stateful virtual bike speed sensor.
+
+Speed moves toward mode-specific targets so the simulator feels like a real
+rider changing effort instead of random unrelated numbers.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ class VirtualSpeedSensor:
     """Simulate smooth, stateful bicycle speed in km/h."""
 
     _MODE_RANGES = {
+        # Each mode has a realistic speed window in km/h.
         "stopped": (0.0, 0.0),
         "easy": (8.0, 16.0),
         "cruising": (18.0, 28.0),
@@ -20,6 +25,7 @@ class VirtualSpeedSensor:
     }
 
     _MODE_WEIGHTS = {
+        # Higher weights make that riding mode appear more often.
         "stopped": 8,
         "easy": 24,
         "cruising": 34,
@@ -34,6 +40,7 @@ class VirtualSpeedSensor:
         max_speed: float = MAX_SPEED_KMH,
         rng: random.Random | None = None,
     ) -> None:
+        """Set speed bounds and initial simulator state."""
         self.min_speed = float(min_speed)
         self.max_speed = float(max_speed)
         self._rng = rng or random.Random()
@@ -46,12 +53,14 @@ class VirtualSpeedSensor:
     def update(self) -> float:
         """Move speed gradually toward the current riding-mode target."""
         if self._target_updates_remaining <= 0:
+            # Keep a target for several updates so speed changes smoothly.
             self._choose_new_target()
 
         self._target_updates_remaining -= 1
         difference = self.target_speed_kmh - self.current_speed_kmh
 
         if difference >= 0:
+            # Accelerating and slowing down use different step sizes.
             max_step = self._rng.uniform(0.45, 1.35)
             if self.riding_mode == "sprint":
                 max_step = self._rng.uniform(0.9, 1.9)
@@ -68,6 +77,7 @@ class VirtualSpeedSensor:
         )
 
         if self.riding_mode == "stopped" and self.current_speed_kmh < 0.4:
+            # Avoid tiny rolling values when the simulated rider has stopped.
             self.current_speed_kmh = 0.0
 
         return self.current_speed_kmh
@@ -94,5 +104,5 @@ class VirtualSpeedSensor:
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
+    """Keep a value inside the configured range."""
     return max(minimum, min(maximum, value))
-

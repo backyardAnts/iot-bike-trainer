@@ -1,4 +1,8 @@
-"""Global safety checks for all workout types."""
+"""Global safety checks for all workout types.
+
+This is the generic safety layer used by rule checks that are not tied to a
+specific workout goal.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +19,7 @@ from config_layer.thresholds import (
 
 def check_safety(sensor_message: dict[str, Any], workout_type: str) -> DecisionResult | None:
     """Return a safety decision when distance or temperature is unsafe."""
+    # The message validator already guarantees these keys exist.
     left_distance_m = float(sensor_message["left_distance_m"])
     right_distance_m = float(sensor_message["right_distance_m"])
     temperature_c = float(sensor_message["temperature_c"])
@@ -24,6 +29,7 @@ def check_safety(sensor_message: dict[str, Any], workout_type: str) -> DecisionR
         right_distance_m < SIDE_DISTANCE_DANGER_M,
     )
     if danger_side != "none":
+        # Distance danger is the highest-priority safety condition here.
         return _distance_decision("danger", danger_side, workout_type)
 
     if temperature_c > TEMPERATURE_DANGER_C:
@@ -61,6 +67,7 @@ def check_safety(sensor_message: dict[str, Any], workout_type: str) -> DecisionR
 
 
 def _get_alert_side(left_alert: bool, right_alert: bool) -> str:
+    """Turn left/right booleans into the shared alert_side value."""
     if left_alert and right_alert:
         return "both"
     if left_alert:
@@ -75,6 +82,7 @@ def _distance_decision(
     alert_side: str,
     workout_type: str,
 ) -> DecisionResult:
+    """Create a distance warning or danger decision."""
     severity = "Danger" if alert_level == "danger" else "Warning"
     display_side_text = _display_side_text(alert_side)
     speaker_side_text = _speaker_side_text(alert_side)
@@ -91,12 +99,14 @@ def _distance_decision(
 
 
 def _display_side_text(alert_side: str) -> str:
+    """Return side text that fits naturally in the display message."""
     if alert_side == "both":
         return "both"
     return alert_side
 
 
 def _speaker_side_text(alert_side: str) -> str:
+    """Return side text that sounds natural in spoken feedback."""
     if alert_side == "both":
         return "both sides"
     return f"{alert_side} side"

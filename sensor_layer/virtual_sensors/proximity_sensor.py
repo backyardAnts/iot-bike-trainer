@@ -1,4 +1,8 @@
-"""Stateful virtual side-distance sensor."""
+"""Stateful virtual side-distance sensor.
+
+The simulator mostly reports safe side distances but sometimes creates short
+close-pass events to exercise safety warnings.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ class VirtualProximitySensor:
         max_distance: float = MAX_DISTANCE_M,
         rng: random.Random | None = None,
     ) -> None:
+        """Create one side sensor and validate which side it represents."""
         normalized_side = side.lower().strip()
         if normalized_side not in {"left", "right"}:
             raise ValueError('side must be "left" or "right"')
@@ -36,6 +41,7 @@ class VirtualProximitySensor:
     def update(self) -> float:
         """Update the side distance, including occasional close-pass events."""
         if self._close_event_updates_remaining <= 0:
+            # Close events are short; outside those windows the target is safe.
             self._maybe_start_close_event()
 
         if self._close_event_updates_remaining > 0:
@@ -69,6 +75,7 @@ class VirtualProximitySensor:
         return self.current_distance_m < threshold
 
     def _maybe_start_close_event(self) -> None:
+        """Randomly start a short close-object event."""
         event_probability = 0.035 if self.side == "right" else 0.018
         if self._rng.random() >= event_probability:
             return
@@ -77,10 +84,11 @@ class VirtualProximitySensor:
         self._close_event_updates_remaining = self._rng.randint(4, 8)
 
     def _choose_safe_target(self) -> None:
+        """Pick the next safe cruising distance."""
         self._safe_target_distance_m = self._rng.uniform(1.5, self.max_distance)
         self._safe_target_updates_remaining = self._rng.randint(3, 8)
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
+    """Keep a value inside the configured range."""
     return max(minimum, min(maximum, value))
-

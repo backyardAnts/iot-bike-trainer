@@ -1,4 +1,8 @@
-"""Tests for athlete account schema migration and backfill."""
+"""Tests for athlete account schema migration and backfill.
+
+These tests create an old-style database in memory and prove migrations add the
+new athlete/account fields without losing existing ride data.
+"""
 
 from __future__ import annotations
 
@@ -9,9 +13,13 @@ from database_layer.migrations import LEGACY_ATHLETE_EMAIL, run_schema_migration
 
 
 class AthleteDatabaseMigrationTest(unittest.TestCase):
+    """Migration checks for databases created before athlete accounts existed."""
+
     def test_old_rows_are_preserved_and_linked_to_legacy_athlete(self) -> None:
+        """Old rows should survive and be connected to the legacy athlete."""
         connection = sqlite3.connect(":memory:")
         connection.row_factory = sqlite3.Row
+        # This schema intentionally omits the new athlete_id columns.
         connection.executescript(
             """
             CREATE TABLE sensor_readings (
@@ -149,6 +157,7 @@ class AthleteDatabaseMigrationTest(unittest.TestCase):
 
         run_schema_migrations(connection)
 
+        # The migration should create the legacy athlete and backfill old rows.
         legacy = connection.execute(
             """
             SELECT id

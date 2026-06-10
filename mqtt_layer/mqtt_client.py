@@ -1,4 +1,8 @@
-"""Reusable MQTT client setup for the public HiveMQ broker."""
+"""Reusable MQTT client setup for the public HiveMQ broker.
+
+Every MQTT entry point uses this helper so client IDs, TLS, credentials, and
+callback API compatibility are configured in one place.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +26,7 @@ def create_mqtt_client(
     broker_port: int | None = None,
 ) -> mqtt.Client:
     """Create, configure, and connect an MQTT client."""
+    # Unique client IDs avoid collisions when simulator and backend run together.
     client_id = f"{MQTT_CLIENT_ID_PREFIX}_{uuid.uuid4().hex[:8]}"
     host = broker_host or MQTT_BROKER_HOST
     port = int(broker_port if broker_port is not None else MQTT_BROKER_PORT)
@@ -32,9 +37,11 @@ def create_mqtt_client(
     client.on_message = _on_message
 
     if MQTT_USERNAME:
+        # Password may be blank when the broker only needs a username.
         client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD or None)
 
     if MQTT_USE_TLS:
+        # Use paho defaults for CA certificates unless the environment changes.
         client.tls_set()
 
     print(f"Connecting MQTT client {client_id} to {host}:{port}...")
@@ -43,6 +50,7 @@ def create_mqtt_client(
 
 
 def _create_paho_client(client_id: str) -> mqtt.Client:
+    """Create a paho client across both v1 and v2 callback APIs."""
     if hasattr(mqtt, "CallbackAPIVersion"):
         return mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
@@ -54,6 +62,7 @@ def _create_paho_client(client_id: str) -> mqtt.Client:
 
 
 def _on_connect(client: mqtt.Client, userdata: object, flags: object, rc: object, *args: object) -> None:
+    """Log broker connection results from paho."""
     reason = getattr(rc, "value", rc)
     if reason == 0:
         print("MQTT connected successfully.")
@@ -62,6 +71,7 @@ def _on_connect(client: mqtt.Client, userdata: object, flags: object, rc: object
 
 
 def _on_disconnect(client: mqtt.Client, userdata: object, *args: object) -> None:
+    """Log clean and unexpected disconnects."""
     reason = _extract_disconnect_reason(args)
     if reason in (0, None):
         print("MQTT disconnected cleanly.")
@@ -70,11 +80,13 @@ def _on_disconnect(client: mqtt.Client, userdata: object, *args: object) -> None
 
 
 def _on_message(client: mqtt.Client, userdata: object, message: mqtt.MQTTMessage) -> None:
+    """Default debug callback used before a caller installs its own handler."""
     payload = message.payload.decode("utf-8", errors="replace")
     print(f"MQTT message received on {message.topic}: {payload}")
 
 
 def _extract_disconnect_reason(args: tuple[object, ...]) -> object:
+    """Handle paho v1 and v2 disconnect callback argument shapes."""
     if not args:
         return None
 

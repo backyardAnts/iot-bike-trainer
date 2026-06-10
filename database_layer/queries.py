@@ -1,4 +1,8 @@
-"""Read helpers for future dashboard and reporting phases."""
+"""Read helpers for future dashboard and reporting phases.
+
+The storage layer writes rows; this module keeps common read queries in one
+place for dashboards, reports, and small debugging scripts.
+"""
 
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ ORDER BY id DESC
 LIMIT ?
 """
 
+# Shared SQL snippets keep insert/read shapes consistent across the project.
 COUNT_DECISIONS_BY_ALERT_LEVEL = """
 SELECT alert_level, COUNT(*) AS count
 FROM decision_logs
@@ -206,8 +211,10 @@ def get_recent_session_analytics(limit: int = 20) -> list[dict[str, Any]]:
 
 
 def _safe_limit(limit: int) -> int:
+    """Keep dashboard query limits positive."""
     return max(1, int(limit))
 
 
 def _row_to_dict(row: Any) -> dict[str, Any] | None:
+    """Convert sqlite3.Row to a normal dictionary."""
     return dict(row) if row is not None else None

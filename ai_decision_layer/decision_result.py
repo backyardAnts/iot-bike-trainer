@@ -1,4 +1,8 @@
-"""Standard decision result returned by the local decision layer."""
+"""Standard decision result returned by the local decision layer.
+
+The same object can drive the LCD, MQTT feedback, saved decision logs, and
+human-readable terminal output.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ from typing import Any
 class DecisionResult:
     """Decision output that can later be printed, stored, or sent over MQTT."""
 
+    # Core alert fields used by storage, MQTT, and the UI.
     alert_level: str
     alert_side: str
     display_active: bool
@@ -18,6 +23,9 @@ class DecisionResult:
     decision_type: str
     recommended_action: str
     workout_type: str
+
+    # Hardware-facing fields are optional because virtual decisions may not
+    # need an LCD line or buzzer pulse.
     lcd_line_1: str = ""
     lcd_line_2: str = ""
     buzzer_state: bool = False

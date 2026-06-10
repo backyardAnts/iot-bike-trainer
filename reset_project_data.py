@@ -1,4 +1,7 @@
-"""Reset local simulator data and recreate the SQLite schema."""
+"""Reset local simulator data and recreate the SQLite schema.
+
+Use this when local demo data is messy and the next run should start clean.
+"""
 
 from __future__ import annotations
 
@@ -8,14 +11,18 @@ from database_layer.db_connection import DATABASE_PATH, initialize_database
 
 def reset_project_data() -> None:
     """Delete local generated data and recreate an empty database."""
+    # The data directory may not exist yet on a fresh checkout.
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+    # Remember what was present so the terminal output can be honest.
     database_existed = DATABASE_PATH.exists()
     counter_existed = DEFAULT_COUNTER_PATH.exists()
 
     if database_existed:
+        # Removing the SQLite file is enough; initialize_database recreates it.
         DATABASE_PATH.unlink()
 
+    # Reset the generated session IDs and rebuild the schema from scratch.
     reset_session_counter()
     initialize_database()
 

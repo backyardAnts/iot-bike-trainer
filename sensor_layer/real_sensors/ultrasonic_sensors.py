@@ -1,4 +1,8 @@
-"""Production GrovePi ultrasonic side-distance sensors."""
+"""Production GrovePi ultrasonic side-distance sensors.
+
+The bike uses two ultrasonic sensors for left/right clearance, returning a
+safe fallback distance when the hardware reading is invalid.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ class UltrasonicSensors(object):
         fallback_distance_m: float = 9.99,
         between_read_delay_seconds: float = 0.06,
     ) -> None:
+        """Configure the two ultrasonic ports and fallback distance."""
         self.left_port = int(left_port)
         self.right_port = int(right_port)
         self.fallback_distance_m = float(fallback_distance_m)
@@ -43,6 +48,7 @@ class UltrasonicSensors(object):
 
     def read(self) -> Tuple[float, float]:
         """Return left_distance_m and right_distance_m."""
+        # Reading the sensors with a tiny gap reduces cross-talk between pings.
         left_result = self._read_one(
             "left",
             self.left_port,
@@ -76,6 +82,7 @@ class UltrasonicSensors(object):
         side: str,
         port: int,
     ) -> Dict[str, Any]:
+        """Read one ultrasonic sensor and normalize it to meters."""
         if self.grovepi is None:
             return self._invalid_result()
 
@@ -99,6 +106,7 @@ class UltrasonicSensors(object):
         }
 
     def _clean_distance_cm(self, value: Any) -> Optional[float]:
+        """Accept only plausible Grove ultrasonic centimeter values."""
         if value is None:
             return None
 
@@ -119,6 +127,7 @@ class UltrasonicSensors(object):
         return distance_cm
 
     def _invalid_result(self, raw_cm: Any = None) -> Dict[str, Any]:
+        """Return the safe fallback reading for one failed side."""
         return {
             "distance_m": self.fallback_distance_m,
             "valid": False,
@@ -126,6 +135,7 @@ class UltrasonicSensors(object):
         }
 
     def _warn_once(self, key: str, message: str) -> None:
+        """Print each side's warning once."""
         if self._last_errors.get(key) == message:
             return
         self._last_errors[key] = message

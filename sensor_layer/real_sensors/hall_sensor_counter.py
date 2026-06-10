@@ -1,4 +1,8 @@
-"""Production GrovePi Hall sensor counters for speed and cadence."""
+"""Production GrovePi Hall sensor counters for speed and cadence.
+
+Hall sensors produce digital pulses when a magnet passes. This module debounces
+those pulses and converts full rotations into speed and cadence.
+"""
 
 from __future__ import annotations
 
@@ -38,6 +42,7 @@ class HallSensorCounter(object):
         debug: bool = False,
         auto_start: bool = False,
     ) -> None:
+        """Set up one Hall sensor counter and optional background polling."""
         self.port = int(port)
         self.label = str(label)
         self.debounce_seconds = max(0.0, float(debounce_seconds))
@@ -153,6 +158,7 @@ class HallSensorCounter(object):
         }
 
     def _poll_loop(self) -> None:
+        """Poll continuously while the background thread is running."""
         while self._running:
             self.poll_once()
             time.sleep(self.poll_interval_seconds)
@@ -193,6 +199,7 @@ class HallSensorCounter(object):
             self._record_pulse(now)
 
     def _record_pulse(self, now: float) -> None:
+        """Debounce and store one accepted magnet pulse."""
         if (
             self._last_event_time is not None
             and now - self._last_event_time < self.debounce_seconds
@@ -203,6 +210,7 @@ class HallSensorCounter(object):
             self._last_event_time is not None
             and now - self._last_event_time > self.timeout_seconds
         ):
+            # A long gap means the wheel probably stopped; old periods no longer help.
             self._period_samples.clear()
             self._pulse_timestamps.clear()
             self._consecutive_suspicious_intervals = 0
@@ -250,6 +258,7 @@ class HallSensorCounter(object):
         self,
         period_seconds: Optional[float],
     ) -> Optional[float]:
+        """Correct one suspicious long interval before accepting a real slowdown."""
         if period_seconds is None or period_seconds <= 0:
             return None
 
@@ -279,6 +288,7 @@ class HallSensorCounter(object):
         self._consecutive_suspicious_intervals += 1
 
         if self._consecutive_suspicious_intervals == 1:
+            # One long gap is usually a missed magnet edge, so divide it down.
             corrected_period_seconds = period_seconds / missed_rotation_count
             if self.debug:
                 print(
@@ -296,6 +306,7 @@ class HallSensorCounter(object):
         return period_seconds
 
     def _warn_once(self, message: str) -> None:
+        """Print each hardware warning once."""
         if message == self._last_error:
             return
         self._last_error = message
@@ -319,6 +330,7 @@ class SpeedCadenceHallSensors(object):
         debug: bool = False,
         background_polling: bool = False,
     ) -> None:
+        """Create paired counters and wheel math for speed/cadence."""
         self.wheel_diameter_cm = float(wheel_diameter_cm)
         self.wheel_circumference_m = math.pi * (self.wheel_diameter_cm / 100.0)
         self.debug = bool(debug)
@@ -367,6 +379,7 @@ class SpeedCadenceHallSensors(object):
 
     def read(self) -> Tuple[float, int]:
         """Return speed_kmh and cadence_rpm."""
+        # Convert rotations per second into wheel speed using circumference.
         self._last_speed_measurement = self.speed_counter.get_measurement()
         self._last_cadence_measurement = self.cadence_counter.get_measurement()
 
@@ -426,11 +439,13 @@ class SpeedCadenceHallSensors(object):
         self.cadence_counter.stop()
 
     def _format_raw(self, raw_value: Any) -> str:
+        """Format a raw digital value for debug output."""
         if raw_value is None:
             return "INVALID"
         return str(raw_value)
 
     def _format_float(self, value: Any) -> str:
+        """Format optional float debug values."""
         if value is None:
             return "N/A"
         try:
@@ -439,6 +454,7 @@ class SpeedCadenceHallSensors(object):
             return "N/A"
 
     def _clean_speed_kmh(self, value: float) -> float:
+        """Reject impossible speed spikes from noisy Hall readings."""
         speed_kmh = round(float(value), 2)
         if speed_kmh < 0:
             return 0.0
@@ -453,6 +469,7 @@ class SpeedCadenceHallSensors(object):
         return speed_kmh
 
     def _clean_cadence_rpm(self, value: float) -> int:
+        """Reject impossible cadence spikes from noisy Hall readings."""
         cadence_rpm = int(round(float(value)))
         if cadence_rpm < 0:
             return 0
@@ -467,6 +484,7 @@ class SpeedCadenceHallSensors(object):
         return cadence_rpm
 
     def _warn_once(self, message: str) -> None:
+        """Print each combined-sensor warning once."""
         if message == self._last_error:
             return
         self._last_error = message

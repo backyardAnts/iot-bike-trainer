@@ -1,4 +1,8 @@
-"""Tests for workout-specific backend guidance decisions."""
+"""Tests for workout-specific backend guidance decisions.
+
+These cases protect the order of feedback decisions: physical safety first,
+then heart-rate overrides, then normal workout guidance.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,10 @@ from backend_layer.backend_service import BackendService, build_feedback_command
 
 
 class WorkoutDecisionLayerTest(unittest.TestCase):
+    """Decision-engine tests using a fixed rider age for stable HR thresholds."""
+
     def setUp(self) -> None:
+        """Create a deterministic decision engine for every test."""
         self.engine = DecisionEngine(rider_profile={"age": 20})
 
     def test_speed_low_speed_gives_increase_speed(self) -> None:
@@ -372,6 +379,7 @@ class WorkoutDecisionLayerTest(unittest.TestCase):
         self.assertFalse(clear_command["buzzer_state"])
 
     def _backend_command(self, message: dict[str, object]) -> dict[str, object]:
+        """Run a message through BackendService feedback command building."""
         service = BackendService(decision_engine=self.engine)
         return build_feedback_command(service._decide_feedback(message))
 
@@ -384,6 +392,7 @@ def _make_sensor_message(
     left_distance_m: float = 2.0,
     right_distance_m: float = 2.0,
 ) -> dict[str, object]:
+    """Build a complete virtual-style sensor message for decision tests."""
     return {
         "device_id": "bike_001",
         "timestamp": "test",
@@ -411,6 +420,7 @@ def _make_real_sensor_message(
     left_distance_m: float = 2.0,
     right_distance_m: float = 2.0,
 ) -> dict[str, object]:
+    """Build a real-hardware message by adding actuator state fields."""
     message = _make_sensor_message(
         workout_type=workout_type,
         speed_kmh=speed_kmh,

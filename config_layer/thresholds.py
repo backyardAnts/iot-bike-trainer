@@ -1,16 +1,22 @@
-"""Global safety and health thresholds for rule-based decisions."""
+"""Global safety and health thresholds for rule-based decisions.
 
-## this files defines the thresholds for the AI. The HR is a percentage value since everyone has a different max HR
-## The HR also should change based on what kind of workout he is doing
+These constants are used by the AI decision layer to decide when to warn the
+rider, slow them down, or mark a reading as dangerous.
+"""
+
+# Side distance is measured in meters because ultrasonic sensors are normalized.
 SIDE_DISTANCE_WARNING_M = 1.5
 SIDE_DISTANCE_DANGER_M = 0.8
 
+# Temperature is checked as a simple room/rider comfort warning.
 TEMPERATURE_WARNING_C = 32.0
 TEMPERATURE_DANGER_C = 38.0
 
+# Heart-rate checks use percentages so the rules adapt to each rider's max HR.
 HR_WARNING_PERCENT_OF_MAX = 0.85
 HR_DANGER_PERCENT_OF_MAX = 0.92
 
+# Workout-specific zones describe the target effort range for each profile.
 HR_ZONES = {
     "endurance": {
         "min_percent": 0.60,

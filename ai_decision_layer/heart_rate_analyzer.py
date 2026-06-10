@@ -1,4 +1,8 @@
-"""Personalized heart-rate safety checks."""
+"""Personalized heart-rate safety checks.
+
+Heart rate is normalized against the rider profile so warnings are based on
+personal effort rather than one fixed BPM value for everyone.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ def estimate_max_hr(age: int | float) -> float:
 
 def is_heart_rate_available(value: Any) -> bool:
     """Return True when the heart-rate value can be used for guidance."""
+    # A missing watch reading is allowed; the workout layer can ask to check it.
     if value is None or isinstance(value, bool):
         return False
 
@@ -61,12 +66,14 @@ def check_heart_rate(
     workout_type: str,
 ) -> DecisionResult | None:
     """Return a heart-rate decision when the rider is above safety thresholds."""
+    # Invalid or absent heart-rate data should not block the rest of the ride.
     if not is_heart_rate_available(sensor_message.get("heart_rate_bpm")):
         return None
 
     heart_rate_bpm = float(sensor_message["heart_rate_bpm"])
     thresholds = calculate_hr_thresholds(rider_profile)
 
+    # Danger comes first because it asks the rider to recover immediately.
     if heart_rate_bpm >= thresholds["danger_hr"]:
         return DecisionResult(
             alert_level="danger",
@@ -95,6 +102,7 @@ def check_heart_rate(
 
 
 def _get_max_heart_rate(rider_profile: dict[str, Any]) -> float:
+    """Use an explicit max HR when present, otherwise estimate it from age."""
     value = rider_profile.get("max_heart_rate")
     if value is not None and not isinstance(value, bool):
         try:

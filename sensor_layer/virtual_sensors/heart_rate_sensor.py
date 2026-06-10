@@ -1,4 +1,8 @@
-"""Stateful virtual heart-rate sensor."""
+"""Stateful virtual heart-rate sensor.
+
+Heart rate reacts slowly to speed and cadence so the readings look like a body
+responding to effort, not a sensor jumping instantly.
+"""
 
 from __future__ import annotations
 
@@ -34,6 +38,7 @@ class VirtualHeartRateSensor:
         max_hr: int = DEFAULT_MAX_HEART_RATE_BPM,
         rng: random.Random | None = None,
     ) -> None:
+        """Create the heart-rate state near resting effort."""
         self.resting_hr = int(resting_hr)
         self.max_hr = min(int(max_hr), MAX_HEART_RATE_BPM)
         self.min_hr = MIN_HEART_RATE_BPM
@@ -53,6 +58,7 @@ class VirtualHeartRateSensor:
         mode = riding_mode if riding_mode in HEART_RATE_MODE_RANGES_BPM else "easy"
         low, high = HEART_RATE_MODE_RANGES_BPM[mode]
 
+        # Convert speed and cadence into one simple effort score.
         speed_intensity = _clamp(speed_kmh / MAX_SPEED_KMH, 0.0, 1.0)
         cadence_intensity = _clamp(cadence_rpm / MAX_CADENCE_RPM, 0.0, 1.0)
         intensity = (
@@ -64,6 +70,7 @@ class VirtualHeartRateSensor:
             speed_kmh <= HEART_RATE_STOPPED_SPEED_THRESHOLD_KMH
             and cadence_rpm <= HEART_RATE_STOPPED_CADENCE_THRESHOLD_RPM
         ):
+            # When both speed and cadence are stopped, drift back toward rest.
             low, high = HEART_RATE_MODE_RANGES_BPM["stopped"]
             intensity = HEART_RATE_STOPPED_INTENSITY
 
@@ -74,6 +81,7 @@ class VirtualHeartRateSensor:
 
         difference = target_hr - self.current_heart_rate_bpm
         if difference >= 0:
+            # Heart rate rises faster during sprint mode than normal riding.
             max_step = HEART_RATE_RISE_NORMAL if mode != "sprint" else HEART_RATE_RISE_FAST
         else:
             max_step = HEART_RATE_FALL_RATE
@@ -94,4 +102,5 @@ class VirtualHeartRateSensor:
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
+    """Keep a value inside the configured range."""
     return max(minimum, min(maximum, value))

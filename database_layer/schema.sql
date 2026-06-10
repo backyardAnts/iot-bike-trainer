@@ -1,3 +1,8 @@
+-- Base SQLite schema for the bike trainer project.
+-- The Python migration layer can add missing columns for older local databases,
+-- but fresh installs start from this file.
+
+-- Athletes stores optional rider profile data used for reports and HR rules.
 CREATE TABLE IF NOT EXISTS athletes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -14,6 +19,7 @@ CREATE TABLE IF NOT EXISTS athletes (
     updated_at TEXT NOT NULL
 );
 
+-- Raw sensor readings are the main time-series data from virtual or real bikes.
 CREATE TABLE IF NOT EXISTS sensor_readings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     athlete_id INTEGER,
@@ -35,6 +41,7 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
     FOREIGN KEY (athlete_id) REFERENCES athletes(id)
 );
 
+-- Status messages are stored raw so MQTT/session behavior can be audited later.
 CREATE TABLE IF NOT EXISTS mqtt_status_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     athlete_id INTEGER,
@@ -46,6 +53,7 @@ CREATE TABLE IF NOT EXISTS mqtt_status_messages (
     FOREIGN KEY (athlete_id) REFERENCES athletes(id)
 );
 
+-- Commands are stored raw plus a normalized command name when one is available.
 CREATE TABLE IF NOT EXISTS commands (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     athlete_id INTEGER,
@@ -57,6 +65,7 @@ CREATE TABLE IF NOT EXISTS commands (
     FOREIGN KEY (athlete_id) REFERENCES athletes(id)
 );
 
+-- Sessions track active/stopped workout windows for a bike and athlete.
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     athlete_id INTEGER,
@@ -68,6 +77,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     FOREIGN KEY (athlete_id) REFERENCES athletes(id)
 );
 
+-- Session metadata captures dashboard-provided rider and workout details.
 CREATE TABLE IF NOT EXISTS session_metadata (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     athlete_id INTEGER,
@@ -89,12 +99,14 @@ CREATE TABLE IF NOT EXISTS session_metadata (
     FOREIGN KEY (athlete_id) REFERENCES athletes(id)
 );
 
+-- Settings holds editable threshold values for later dashboard phases.
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 
+-- Alerts is prepared for future high-level AI alerts.
 CREATE TABLE IF NOT EXISTS alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     athlete_id INTEGER,
@@ -109,6 +121,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     FOREIGN KEY (athlete_id) REFERENCES athletes(id)
 );
 
+-- Decision logs store every backend recommendation made from a sensor reading.
 CREATE TABLE IF NOT EXISTS decision_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     athlete_id INTEGER,
@@ -128,6 +141,7 @@ CREATE TABLE IF NOT EXISTS decision_logs (
     FOREIGN KEY (athlete_id) REFERENCES athletes(id)
 );
 
+-- Session analytics stores calculated summary rows for reports and dashboards.
 CREATE TABLE IF NOT EXISTS session_analytics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     athlete_id INTEGER,
@@ -149,6 +163,7 @@ CREATE TABLE IF NOT EXISTS session_analytics (
     FOREIGN KEY (athlete_id) REFERENCES athletes(id)
 );
 
+-- Email tracking prevents duplicate stopped-session report sends.
 CREATE TABLE IF NOT EXISTS session_report_emails (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     athlete_id INTEGER,
@@ -164,6 +179,7 @@ CREATE TABLE IF NOT EXISTS session_report_emails (
     FOREIGN KEY (athlete_id) REFERENCES athletes(id)
 );
 
+-- Indexes below keep recent-read, session, athlete, and report queries fast.
 CREATE INDEX IF NOT EXISTS idx_athletes_email
 ON athletes(email);
 

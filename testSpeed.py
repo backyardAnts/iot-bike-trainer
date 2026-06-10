@@ -1,3 +1,9 @@
+"""Quick manual speed Hall sensor test.
+
+Run this on the Raspberry Pi when you want to confirm the wheel magnet and D3
+Hall sensor are producing believable speed readings.
+"""
+
 import time
 from collections import deque
 import grovepi
@@ -27,8 +33,10 @@ AVERAGE_WINDOW = 5
 
 POLL_DELAY_SECONDS = 0.003
 
+# Configure the GrovePi pin before the polling loop starts.
 grovepi.pinMode(SPEED_PIN, "INPUT")
 
+# These values track edge timing between magnet detections.
 last_state = grovepi.digitalRead(SPEED_PIN)
 last_pulse_time = None
 last_valid_pulse_time = None
@@ -52,6 +60,7 @@ try:
                 or (now - last_valid_pulse_time) >= DEBOUNCE_SECONDS
             ):
                 if last_pulse_time is not None:
+                    # Time between pulses gives rotations; circumference gives distance.
                     interval = now - last_pulse_time
 
                     instant_speed_kmh = (
@@ -59,6 +68,7 @@ try:
                     ) * 3.6
 
                     speed_samples.append(instant_speed_kmh)
+                    # A short rolling average makes the printed value less jumpy.
                     avg_speed_kmh = sum(speed_samples) / len(speed_samples)
 
                     print(
@@ -83,6 +93,7 @@ try:
         ):
             if speed_samples:
                 print("No pulse recently. Speed: 0.00 km/h")
+                # Clear the average so the next spin starts fresh.
                 speed_samples.clear()
             last_pulse_time = None
 

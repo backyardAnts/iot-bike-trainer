@@ -1,11 +1,15 @@
-"""Persistent session ID generation for simulator runs."""
+"""Persistent session ID generation for simulator and bike runs.
+
+The small counter file keeps automatic session IDs moving forward between
+separate process starts.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Union
-## used to manage sessions
 
+# Project-local storage path for the simple session counter.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
 DEFAULT_COUNTER_PATH = DATA_DIR / "session_counter.txt"
@@ -29,6 +33,7 @@ def read_current_session_number(counter_file: PathLike | None = None) -> int:
     try:
         return max(0, int(counter_path.read_text(encoding="utf-8").strip()))
     except ValueError:
+        # A bad counter file should not stop the simulator from starting.
         return 0
 
 
@@ -58,4 +63,5 @@ def reset_session_counter(counter_file: PathLike | None = None) -> None:
 
 
 def _resolve_counter_path(counter_file: PathLike | None = None) -> Path:
+    """Use the supplied test path, or the normal project data path."""
     return Path(counter_file) if counter_file is not None else DEFAULT_COUNTER_PATH

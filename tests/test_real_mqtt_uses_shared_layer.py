@@ -1,4 +1,8 @@
-"""Tests for real mode MQTT wiring without opening a network connection."""
+"""Tests for real mode MQTT wiring without opening a network connection.
+
+The real-mode runner imports MQTT and RealBike lazily, so these tests replace
+those modules with fakes and verify the shared MQTT client is called correctly.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,10 @@ from common.message_schema import build_sensor_message
 
 
 class RealMqttUsesSharedLayerTest(unittest.TestCase):
+    """Integration-style tests for real-mode MQTT setup arguments."""
+
     def test_real_mode_uses_shared_mqtt_client_defaults(self) -> None:
+        """Default real MQTT mode should use the configured broker values."""
         calls = []
         fake_mqtt_module = types.ModuleType("mqtt_layer.mqtt_client")
         fake_mqtt_module.create_mqtt_client = (
@@ -31,6 +38,7 @@ class RealMqttUsesSharedLayerTest(unittest.TestCase):
         sys.modules["sensor_layer.real_sensors.real_bike"] = fake_real_module
 
         try:
+            # _FakeRealBike raises KeyboardInterrupt during idle wait to exit the loop.
             main_virtual_bike.run_real_mode(
                 workout_type="speed",
                 interval_seconds=0,
@@ -44,6 +52,7 @@ class RealMqttUsesSharedLayerTest(unittest.TestCase):
         self.assertEqual(calls, [(None, None)])
 
     def test_real_mode_passes_optional_mqtt_override_to_shared_client(self) -> None:
+        """Explicit broker overrides should be passed to create_mqtt_client."""
         calls = []
         fake_mqtt_module = types.ModuleType("mqtt_layer.mqtt_client")
         fake_mqtt_module.create_mqtt_client = (
@@ -79,6 +88,8 @@ class RealMqttUsesSharedLayerTest(unittest.TestCase):
 
 
 class _FakeRealBike:
+    """RealBike fake that lets run_real_mode start without hardware."""
+
     def __init__(self, *args: object, **kwargs: object) -> None:
         self.device_id = "bike_001"
         self.session_id = "session_real_test"
@@ -122,6 +133,8 @@ class _FakeRealBike:
 
 
 class _FakeClient:
+    """MQTT client fake used by the publisher/subscriber wrappers."""
+
     def loop_start(self) -> None:
         return None
 
@@ -146,11 +159,13 @@ def _record_client_call(
     broker_host: str | None,
     broker_port: int | None,
 ) -> _FakeClient:
+    """Record the broker arguments and return a fake MQTT client."""
     calls.append((broker_host, broker_port))
     return _FakeClient()
 
 
 def _restore_module(name: str, original_module: object | None) -> None:
+    """Put sys.modules back the way the test found it."""
     if original_module is None:
         sys.modules.pop(name, None)
         return

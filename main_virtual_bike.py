@@ -1,4 +1,8 @@
-"""Run the Phase 3 virtual bike sensor simulator."""
+"""Run the virtual simulator and the shared real-bike command-line modes.
+
+This file started as the virtual-bike runner, then became the place where the
+real hardware loop reuses the same MQTT, command, and self-test helpers.
+"""
 
 from __future__ import annotations
 
@@ -34,6 +38,7 @@ def run_forever(
     decisions: bool = False,
 ) -> None:
     """Print one JSON sensor message per sample interval until Ctrl+C."""
+    # Local mode prints directly to stdout and does not need MQTT setup.
     bike = VirtualBike(
         session_id=session_id,
         workout_type=workout_type,
@@ -47,6 +52,7 @@ def run_forever(
 
     try:
         while True:
+            # Each update advances all virtual sensors once.
             message = bike.update()
             print_sensor_output(message, decision_engine)
             time.sleep(interval_seconds)
@@ -62,6 +68,7 @@ def run_mqtt_mode(
     decisions: bool = False,
 ) -> None:
     """Publish virtual bike readings to MQTT while also printing locally."""
+    # MQTT imports stay local so non-MQTT simulator usage has fewer dependencies.
     from config_layer.mqtt_topics import SENSOR_TOPIC
     from mqtt_layer.command_handler import CommandHandler
     from mqtt_layer.mqtt_client import create_mqtt_client
@@ -82,6 +89,7 @@ def run_mqtt_mode(
     try:
         client = create_mqtt_client()
         publisher = MqttPublisher(client)
+        # The virtual bike can receive the same feedback commands as real mode.
         command_handler = CommandHandler(bike)
         subscriber = MqttCommandSubscriber(client, command_handler)
 
@@ -104,6 +112,7 @@ def run_mqtt_mode(
 
         while True:
             message = bike.update()
+            # Publish first, then print locally for debugging in the terminal.
             publisher.publish_json(SENSOR_TOPIC, message)
             print_sensor_output(message, decision_engine)
             time.sleep(interval_seconds)
@@ -111,6 +120,7 @@ def run_mqtt_mode(
         print("\nVirtual bike MQTT simulator stopping.")
     finally:
         if publisher is not None:
+            # Let the backend/dashboard know this simulator session ended.
             publisher.publish_status(
                 "stopped",
                 {
@@ -170,6 +180,7 @@ def run_real_mode(
         temperature_debug=temperature_debug,
         command_feedback_enabled=mqtt_enabled,
         command_timeout_seconds=max(3.0, float(interval_seconds) * 3.0),
+        # In MQTT mode the dashboard sends the start command and session ID.
         defer_session_creation=mqtt_enabled,
     )
     profile = get_training_profile(bike.workout_type)
@@ -189,6 +200,7 @@ def run_real_mode(
                     broker_port=broker_port,
                 )
                 publisher = MqttPublisher(client)
+                # Real hardware applies commands on the main loop, not the MQTT thread.
                 command_handler = CommandHandler(bike, defer_application=True)
                 subscriber = MqttCommandSubscriber(
                     client,
@@ -198,8 +210,10 @@ def run_real_mode(
                 client.loop_start()
                 subscriber.start()
                 bike.set_command_feedback_enabled(True)
+                # "ready" says the bike is online before a workout starts.
                 _publish_real_status(publisher, "ready", bike, workout_active=False)
             except Exception as exc:
+                # Hardware should still work locally if MQTT cannot connect.
                 print(f"MQTT unavailable; continuing with local fallback: {exc}")
                 bike.set_command_feedback_enabled(False)
 
@@ -243,9 +257,11 @@ def run_real_mode(
             time.sleep(2.0)
 
         while True:
+            # Apply pending MQTT commands before reading sensors.
             command_result = _apply_pending_real_command(command_handler)
             _handle_real_command_result(command_result, publisher, bike)
             if mqtt_enabled and not _is_real_workout_active(bike):
+                # Idle MQTT mode waits cheaply until the dashboard starts a workout.
                 bike.wait_between_updates(_real_idle_wait_seconds(interval_seconds))
                 continue
 
@@ -261,7 +277,9 @@ def run_real_mode(
             if not validate_sensor_message(message):
                 print("Warning: real sensor message failed schema validation.")
             if publisher is not None:
+                # In real mode this is the raw hardware reading before backend merging.
                 publisher.publish_json(topic, message)
+            # Apply commands again so a stop can be handled quickly after publish.
             command_result = _apply_pending_real_command(command_handler)
             _handle_real_command_result(command_result, publisher, bike)
             bike.wait_between_updates(interval_seconds)
@@ -269,6 +287,7 @@ def run_real_mode(
         print("\nReal GrovePi bike mode stopping.")
     finally:
         if publisher is not None and _is_real_workout_active(bike):
+            # Stop status is retained so dashboards do not think the bike is active.
             _publish_real_status(publisher, "stopped", bike, workout_active=False)
         if subscriber is not None:
             subscriber.stop()
@@ -309,6 +328,7 @@ def _handle_real_command_result(
         return
 
     if status == "started":
+        # Started status includes workout/session context for the backend.
         profile = get_training_profile(bike.workout_type)
         print(
             "Workout started: "
@@ -335,6 +355,7 @@ def _handle_real_command_result(
         return
 
     if status in {"buzzer_tested", "mode_changed", "ignored", "invalid"}:
+        # Non-session commands still publish a status so the dashboard gets feedback.
         _publish_real_status(
             publisher,
             status,
@@ -349,6 +370,7 @@ def _publish_real_status(
     bike: Any,
     workout_active: bool,
 ) -> None:
+    """Publish one real-bike status payload when MQTT is available."""
     if publisher is None:
         return
 
@@ -362,6 +384,7 @@ def _publish_real_status(
         payload["session_id"] = session_id
     workout_type = str(getattr(bike, "workout_type", "")).strip()
     if workout_type and (workout_active or status in {"started", "stopped"}):
+        # Keep ready/idle payloads small, but include workout type for real sessions.
         payload["workout_type"] = workout_type
     athlete = getattr(bike, "athlete", {})
     if isinstance(athlete, dict) and athlete:
@@ -371,12 +394,14 @@ def _publish_real_status(
 
 
 def _is_real_workout_active(bike: Any) -> bool:
+    """Read workout active state across real and fake bike objects."""
     if hasattr(bike, "is_session_active"):
         return bool(bike.is_session_active())
     return bool(getattr(bike, "workout_active", False))
 
 
 def _real_idle_wait_seconds(interval_seconds: float) -> float:
+    """Clamp idle waits so command polling stays responsive."""
     try:
         interval = float(interval_seconds)
     except (TypeError, ValueError):
@@ -392,6 +417,7 @@ def _print_merged_sensor_output(payload: bytes) -> None:
 
 def run_self_test(reading_count: int = 10) -> None:
     """Run a short deterministic simulation and validate each message."""
+    # This exercises schema validation, workout selection, and decision storage.
     run_session_id_self_test()
 
     print("Testing valid workout types.")
@@ -448,6 +474,7 @@ def run_session_id_self_test() -> None:
 
     print("Testing dynamic session IDs.")
     with tempfile.TemporaryDirectory() as temp_dir:
+        # Use a temporary counter so the real project session counter is untouched.
         counter_path = Path(temp_dir) / "session_counter.txt"
 
         if get_next_session_id(counter_path) != "session_001":
@@ -524,6 +551,7 @@ def run_decision_self_test() -> None:
             heart_rate_bpm=120,
         )
     )
+    # Low cadence in a cadence workout should ask the rider to pedal faster.
     if low_cadence_decision.recommended_action != "pedal_faster":
         raise RuntimeError(f"Unexpected low cadence decision: {low_cadence_decision}")
 
@@ -547,6 +575,7 @@ def run_decision_self_test() -> None:
             right_distance_m=0.49,
         )
     )
+    # Close side distance should override normal workout guidance.
     if (
         right_danger_decision.decision_type != "physical_safety"
         or right_danger_decision.alert_level != "warning"
@@ -608,6 +637,7 @@ def run_decision_log_storage_self_test(decision: DecisionResult) -> None:
 
         @contextmanager
         def get_test_db_connection():
+            """Open the temporary SQLite database used for this self-test."""
             connection = sqlite3.connect(database_path)
             connection.row_factory = sqlite3.Row
             try:
@@ -623,6 +653,7 @@ def run_decision_log_storage_self_test(decision: DecisionResult) -> None:
             connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
 
         original_get_db_connection = sqlite_storage.get_db_connection
+        # Patch storage to use the temp database, then restore it in finally.
         sqlite_storage.get_db_connection = get_test_db_connection
         try:
             sqlite_storage.initialize_default_settings()
@@ -704,6 +735,8 @@ def run_backend_feedback_self_test(decision: DecisionResult) -> None:
 
 
 class _FakeBackendService:
+    """Small backend double used by the self-test MQTT receiver check."""
+
     def __init__(self, feedback_command: dict[str, Any]) -> None:
         self.feedback_command = feedback_command
 
@@ -730,6 +763,8 @@ class _FakeBackendService:
 
 
 class _FakePublisher:
+    """Publisher double that records topics instead of using a broker."""
+
     def __init__(self) -> None:
         self.publish_count = 0
         self.last_topic: str | None = None
@@ -745,6 +780,8 @@ class _FakePublisher:
 
 
 class _FakeMqttMessage:
+    """Minimal paho-style MQTT message for self-tests."""
+
     def __init__(self, topic: str, payload: bytes) -> None:
         self.topic = topic
         self.payload = payload
@@ -785,9 +822,11 @@ def print_sensor_output(
 ) -> None:
     """Print the normal JSON output, or readable sensor plus decision output."""
     if decision_engine is None:
+        # Normal mode emits one compact JSON object per line.
         print(message_to_json(message), flush=True)
         return
 
+    # Decision mode is for humans watching the terminal.
     decision = decision_engine.analyze(message)
     print(
         "Sensor: "
@@ -811,6 +850,7 @@ def format_decision(decision: DecisionResult) -> str:
 def choose_workout_type(workout_type: str | None = None) -> str:
     """Return a validated workout type from CLI input or an interactive menu."""
     if workout_type is not None:
+        # CLI usage should fail fast instead of dropping into the menu.
         if is_valid_workout_type(workout_type):
             return normalize_workout_type(workout_type)
         supported = ", ".join(WORKOUT_TYPES)
@@ -820,6 +860,7 @@ def choose_workout_type(workout_type: str | None = None) -> str:
         )
 
     while True:
+        # Interactive mode is useful for demos when no --workout flag is supplied.
         print("\nChoose workout type:")
         for index, profile_workout_type in enumerate(WORKOUT_TYPES, start=1):
             profile = TRAINING_PROFILES[profile_workout_type]
@@ -842,6 +883,7 @@ def choose_workout_type(workout_type: str | None = None) -> str:
 
 
 def parse_args() -> argparse.Namespace:
+    """Read CLI flags for virtual, real, MQTT, and self-test modes."""
     parser = argparse.ArgumentParser(description="Virtual bike simulator")
     parser.add_argument(
         "--real",
@@ -965,8 +1007,10 @@ if __name__ == "__main__":
     args = parse_args()
     try:
         if args.self_test:
+            # Self-test exits after local validation.
             run_self_test()
         elif args.real:
+            # Real mode shares flags with the dedicated main_real_bike.py wrapper.
             selected_workout_type = (
                 choose_workout_type(args.workout)
                 if args.workout is not None

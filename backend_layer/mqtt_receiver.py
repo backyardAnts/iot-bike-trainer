@@ -1,4 +1,8 @@
-"""MQTT receiver for the backend SQLite service."""
+"""MQTT receiver for the backend SQLite service.
+
+This class owns MQTT subscriptions and publishing. BackendService owns the
+actual parsing, storage, and decision work.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ class MqttBackendReceiver:
     """Subscribe to backend topics and route payloads to BackendService."""
 
     def __init__(self, backend_service: Any) -> None:
+        """Store the service that will handle incoming MQTT payloads."""
         self.backend_service = backend_service
         self.client: Any | None = None
         self.publisher: MqttPublisher | None = None
@@ -31,6 +36,7 @@ class MqttBackendReceiver:
         self.publisher = MqttPublisher(self.client)
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
+        # The paho loop runs callbacks on its own thread.
         self.client.loop_start()
         print("Backend MQTT receiver started.")
 
@@ -48,6 +54,7 @@ class MqttBackendReceiver:
         self.publisher = None
 
     def _subscribe(self, topic: str) -> None:
+        """Subscribe to one topic and log the broker return code."""
         if self.client is None:
             return
 
@@ -66,6 +73,7 @@ class MqttBackendReceiver:
         rc: object,
         *args: object,
     ) -> None:
+        """Subscribe to all backend topics after the broker accepts the connection."""
         reason = getattr(rc, "value", rc)
         if reason != 0:
             print(f"Backend MQTT connection failed with code: {reason}")
@@ -76,6 +84,7 @@ class MqttBackendReceiver:
             self._subscribe(topic)
 
     def _on_message(self, client: Any, userdata: object, message: Any) -> None:
+        """Route one MQTT message based on its topic."""
         if message.topic == SENSOR_TOPIC:
             feedback_command = self.backend_service.handle_sensor_message(
                 message.payload,
@@ -84,6 +93,7 @@ class MqttBackendReceiver:
             self._publish_merged_sensor_message(
                 self.backend_service.get_latest_merged_sensor_message()
             )
+            # Feedback goes back to the same command topic the bike listens to.
             if feedback_command is not None:
                 self._publish_feedback_command(feedback_command)
             return
@@ -108,6 +118,7 @@ class MqttBackendReceiver:
         print(f"Ignored message from unexpected topic: {message.topic}")
 
     def _publish_feedback_command(self, feedback_command: dict[str, Any]) -> None:
+        """Publish a feedback command generated from a sensor decision."""
         if self.publisher is None:
             print("Could not publish feedback command: MQTT publisher is not ready.")
             return
@@ -119,6 +130,7 @@ class MqttBackendReceiver:
         self,
         merged_sensor_message: dict[str, Any] | None,
     ) -> None:
+        """Publish the sensor message after watch heart-rate merging."""
         if merged_sensor_message is None:
             return
         if self.publisher is None:
@@ -129,6 +141,7 @@ class MqttBackendReceiver:
             print(f"Published merged sensor message to {MERGED_SENSORS_TOPIC}")
 
     def _publish_session_message(self, session_payload: dict[str, Any]) -> None:
+        """Publish retained active/stopped session state for dashboards."""
         if self.publisher is None:
             print("Could not publish session message: MQTT publisher is not ready.")
             return

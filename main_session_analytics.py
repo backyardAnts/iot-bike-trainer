@@ -1,4 +1,8 @@
-"""Run a simple session analytics report from stored SQLite readings."""
+"""Run a simple session analytics report from stored SQLite readings.
+
+This script is meant for quick checks after a ride: it loads one session from
+SQLite, calculates the summary numbers, prints them, and can store the result.
+"""
 
 from __future__ import annotations
 
@@ -21,12 +25,16 @@ def run_session_analytics(
     save_summary: bool = True,
 ) -> dict[str, Any] | None:
     """Calculate, print, and optionally save analytics for one session."""
+    # The report reads from SQLite, so make sure the schema exists first.
     initialize_database()
+
+    # If no session is passed on the command line, use the latest stored ride.
     selected_session_id = session_id or get_latest_session_id()
     if selected_session_id is None:
         print("No sensor readings found. Run the simulator/backend first.")
         return None
 
+    # Empty sessions are still returned so callers can see which ID was checked.
     analytics = calculate_session_analytics(selected_session_id)
     if analytics["total_readings"] == 0:
         print(f"No readings found for session: {selected_session_id}")
@@ -42,6 +50,7 @@ def run_session_analytics(
 
 def print_session_analytics(analytics: dict[str, Any]) -> None:
     """Print a readable analytics summary."""
+    # Keep this output plain because it is used from the terminal.
     print("Session Analytics")
     print(f"Session: {analytics['session_id']}")
     print(f"Average speed: {analytics['average_speed_kmh']} km/h")
@@ -67,13 +76,16 @@ def run_self_test() -> None:
         database_path = Path(temp_dir) / "analytics_test.db"
 
         def get_test_db_connection() -> sqlite3.Connection:
+            """Open the temporary database used only for this self-test."""
             connection = sqlite3.connect(database_path)
             connection.row_factory = sqlite3.Row
             return connection
 
+        # Build a fresh schema so the test does not touch the real project data.
         with get_test_db_connection() as connection:
             connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
 
+        # Patch the storage modules to use the temporary database connection.
         original_analytics_connection = analytics_module.get_db_connection
         original_storage_connection = sqlite_storage.get_db_connection
         analytics_module.get_db_connection = get_test_db_connection
@@ -86,6 +98,7 @@ def run_self_test() -> None:
             analytics_module.get_db_connection = original_analytics_connection
             sqlite_storage.get_db_connection = original_storage_connection
 
+        # These checks lock down the exact values produced by the demo readings.
         if analytics["average_speed_kmh"] != 24.0:
             raise RuntimeError(f"Unexpected average speed: {analytics}")
         if analytics["average_cadence_rpm"] != 82.0:
@@ -119,6 +132,7 @@ def run_self_test() -> None:
 
 
 def _insert_demo_readings(sqlite_storage_module: Any) -> None:
+    """Insert two small sessions so improvement comparison can be tested."""
     for session_id, readings in {
         "session_old": [
             (20.0, 78, 125),
@@ -153,6 +167,7 @@ def _build_test_sensor_message(
     cadence_rpm: int,
     heart_rate_bpm: int,
 ) -> dict[str, Any]:
+    """Build the same shape of message the simulator writes during a ride."""
     return {
         "device_id": "bike_001",
         "timestamp": timestamp,
@@ -173,6 +188,7 @@ def _build_test_sensor_message(
 
 
 def parse_args() -> argparse.Namespace:
+    """Read the command-line options for the analytics script."""
     parser = argparse.ArgumentParser(description="Session analytics report")
     parser.add_argument(
         "--session",

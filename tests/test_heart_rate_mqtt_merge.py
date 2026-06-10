@@ -1,4 +1,8 @@
-"""Tests for Samsung Watch heart-rate MQTT merge behavior."""
+"""Tests for Samsung Watch heart-rate MQTT merge behavior.
+
+The backend caches watch heart-rate readings and merges the latest fresh value
+into bike sensor messages before saving and deciding.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +22,10 @@ from config_layer.mqtt_topics import (
 
 
 class HeartRateMqttMergeTest(unittest.TestCase):
+    """Tests for watch HR parsing, caching, expiration, and MQTT publishing."""
+
     def setUp(self) -> None:
+        """Patch storage writes so tests can inspect saved messages."""
         self.saved_sensor_messages = []
         self.saved_decision_logs = []
         self.original_save_sensor_reading = backend_service_module.save_sensor_reading
@@ -27,6 +34,7 @@ class HeartRateMqttMergeTest(unittest.TestCase):
         backend_service_module.save_decision_log = self._save_decision_log
 
     def tearDown(self) -> None:
+        """Restore backend storage functions."""
         backend_service_module.save_sensor_reading = self.original_save_sensor_reading
         backend_service_module.save_decision_log = self.original_save_decision_log
 
@@ -208,6 +216,7 @@ class HeartRateMqttMergeTest(unittest.TestCase):
         )
 
     def _save_sensor_reading(self, message: dict[str, object]) -> None:
+        """Record sensor messages instead of writing SQLite rows."""
         self.saved_sensor_messages.append(dict(message))
 
     def _save_decision_log(
@@ -216,6 +225,7 @@ class HeartRateMqttMergeTest(unittest.TestCase):
         decision: object,
         source_topic: str | None = None,
     ) -> None:
+        """Record decision log inputs instead of writing SQLite rows."""
         self.saved_decision_logs.append(
             {
                 "sensor_message": dict(sensor_message),
@@ -226,6 +236,8 @@ class HeartRateMqttMergeTest(unittest.TestCase):
 
 
 class _FakeClock:
+    """Controllable clock used to test heart-rate freshness."""
+
     def __init__(self, value: float) -> None:
         self.value = value
 
@@ -234,6 +246,8 @@ class _FakeClock:
 
 
 class _FakeDecisionEngine:
+    """Decision engine fake that records the message it received."""
+
     def __init__(self) -> None:
         self.last_message = {}
 
@@ -252,6 +266,8 @@ class _FakeDecisionEngine:
 
 
 class _FakeHeartRateService:
+    """Service fake used to verify receiver routing."""
+
     def __init__(self) -> None:
         self.last_payload = None
 
@@ -260,12 +276,16 @@ class _FakeHeartRateService:
 
 
 class _FakeMqttMessage:
+    """Minimal paho-style MQTT message."""
+
     def __init__(self, topic: str, payload: bytes) -> None:
         self.topic = topic
         self.payload = payload
 
 
 class _FakePublisher:
+    """Publisher fake that records JSON payloads by topic."""
+
     def __init__(self) -> None:
         self.payloads = {}
 
@@ -275,6 +295,7 @@ class _FakePublisher:
 
 
 def _make_sensor_message(session_id: str) -> dict[str, object]:
+    """Build a bike sensor message with heart_rate_bpm set to unavailable."""
     return build_sensor_message(
         device_id="bike_001",
         session_id=session_id,
